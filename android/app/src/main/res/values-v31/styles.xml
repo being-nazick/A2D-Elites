@@ -3,6 +3,6 @@
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
         <!-- Android 12+ devices will safely read these items here without errors -->
         <item name="android:windowSplashScreenBackground">#F9F6F0</item>
-        <item name="windowSplashScreenBackground">#F9F6F0</item>
+        <item name="windowSplashScreenBackground">#FAF3E0</item>
     </style>
 </resources>

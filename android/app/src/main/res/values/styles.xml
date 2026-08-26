@@ -16,6 +16,6 @@
     </style>
 
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:windowBackground">#F9F6F0</item>
+        <item name="android:windowBackground">#FAF3E0</item>
     </style>
 </resources>
