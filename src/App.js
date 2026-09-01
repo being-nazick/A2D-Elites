@@ -430,6 +430,24 @@
         };
       });
 
+      // Capture delivery location in background (non-blocking)
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            const lat = position.coords.latitude;
+            const lng = position.coords.longitude;
+            setData((prev) => ({
+              ...prev,
+              orders: prev.orders.map((o) =>
+                o.id === orderId ? { ...o, latitude: lat, longitude: lng } : o
+              ),
+            }));
+          },
+          () => {}, // silently ignore errors for delivery location
+          { enableHighAccuracy: true, timeout: 10000 }
+        );
+      }
+
       // Close the modal
       setReturnModalOrder(null);
 
@@ -1353,9 +1371,32 @@ const totalBottlesToCollect = Math.max(0, totalMilkQty - totalReturned);
     const [orderStatus, setOrderStatus] = useState(initial?.orderStatus || "Pending");
     const [notes, setNotes] = useState(initial?.notes || "");
     const [bottlesReturned, setBottlesReturned] = useState(initial?.bottlesReturned || 0);
+    const [latitude, setLatitude] = useState(initial?.latitude || 0);
+    const [longitude, setLongitude] = useState(initial?.longitude || 0);
+    const [locLoading, setLocLoading] = useState(false);
     const [showCustList, setShowCustList] = useState(false);
 
     const total = orderTotal(items);
+
+    function handleGetLocation() {
+      if (!navigator.geolocation) {
+        alert("Geolocation is not supported by your browser");
+        return;
+      }
+      setLocLoading(true);
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setLatitude(position.coords.latitude);
+          setLongitude(position.coords.longitude);
+          setLocLoading(false);
+        },
+        (error) => {
+          alert("Could not get location: " + error.message);
+          setLocLoading(false);
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
+    }
 
     function updateItem(idx, patch) {
       setItems((prev) => prev.map((it, i) => {
@@ -1389,6 +1430,7 @@ const totalBottlesToCollect = Math.max(0, totalMilkQty - totalReturned);
         amountPaid: paymentStatus === "Paid" ? total : Number(amountPaid) || 0,
         orderStatus, notes, total,
         bottlesReturned: Number(bottlesReturned) || 0,
+        latitude, longitude,
         createdAt: initial?.createdAt || new Date().toISOString(),
         recurringId: initial?.recurringId,
       });
@@ -1435,6 +1477,30 @@ const totalBottlesToCollect = Math.max(0, totalMilkQty - totalReturned);
           <div style={{ flex: 1 }}><Field label="Phone Number"><input style={inputStyle} value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="10-digit number" /></Field></div>
         </div>
         <Field label="Delivery Address"><input style={inputStyle} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="House / street / area" /></Field>
+
+        <Field label="📍 Delivery Location (GPS)">
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button className="tap" onClick={handleGetLocation} disabled={locLoading} style={{
+              background: latitude && longitude ? C.greenSoft : C.cream,
+              color: latitude && longitude ? C.green : C.primary,
+              border: `1px solid ${latitude && longitude ? C.green : C.primary}`,
+              borderRadius: 10, padding: "9px 14px", fontSize: 12.5, fontWeight: 700,
+              opacity: locLoading ? 0.6 : 1, cursor: locLoading ? "wait" : "pointer",
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+              <MapPin size={14} />
+              {locLoading ? "Getting..." : latitude && longitude ? "📍 Captured" : "Get Location"}
+            </button>
+            {latitude && longitude ? (
+              <a href={`https://www.google.com/maps?q=${latitude},${longitude}`} target="_blank" rel="noreferrer"
+                style={{ fontSize: 11.5, color: C.primary, textDecoration: "underline" }}>
+                {latitude.toFixed(5)}, {longitude.toFixed(5)}
+              </a>
+            ) : (
+              <span style={{ fontSize: 11.5, color: C.inkMute }}>Tap to capture GPS coordinates</span>
+            )}
+          </div>
+        </Field>
 
         <Field label="Products">
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
