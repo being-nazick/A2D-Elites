@@ -1,70 +1,39 @@
-# Getting Started with Create React App
+# A2D'Elites - Dairy Management App 🥛
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A simple, offline-first React app built to handle the daily operations of a local dairy delivery business. It's designed to work well on mobile devices and runs completely locally using Capacitor for storage.
 
-## Available Scripts
+## What it actually does
 
-In the project directory, you can run:
+*   **Daily Deliveries:** Add orders, mark them as delivered, and track who has paid vs. who owes money.
+*   **Recurring Orders:** Set up "standing orders" (e.g., 2 bottles of milk every day, 1 paneer on Tuesdays). The app automatically creates today's orders when you open it.
+*   **Bottle Tracking:** Tracks how many empty glass bottles a customer has returned versus how many were delivered.
+*   **Customers:** A mini-CRM to see a customer's order history and total outstanding balance.
+*   **Billing:** Generates a clean PDF bill that can be printed or shared. Also includes a quick WhatsApp button to send delivery confirmations.
+*   **Reports:** Simple charts to see daily sales trends and 1-click CSV exports for accounting.
 
-### `npm start`
+## Tech Stack
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+*   **React:** (UI and logic)
+*   **Capacitor:** (`@capacitor/preferences` for saving data offline, plus native filesystem/share plugins).
+*   **Lucide React:** For the icons.
+*   **Recharts:** For the dashboard and report graphs.
+*   **html2pdf.js:** Loaded dynamically to generate PDF bills on the fly.
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## How to run it locally
 
-### `npm test`
+1. Make sure you have your standard React environment set up (Vite is recommended).
+2. Install the necessary dependencies:
+   ```bash
+   npm install lucide-react recharts @capacitor/core @capacitor/preferences @capacitor/filesystem @capacitor/share
+   ```
+3. Drop the code into your `App.jsx`.
+4. Make sure you have a `logo.png` in your `public` folder so the header doesn't look broken.
+5. Start it up:
+   ```bash
+   npm run dev
+   ```
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## A quick note on data storage 💾
+Because this is an offline-first app, **there is no backend/database**. Everything is saved locally on the device using Capacitor's Preferences API. 
 
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+If you are testing this in a web browser, clearing your site data/Local Storage *will* wipe your test data. If deployed as a native Android/iOS app via Capacitor, the data persists safely on the device.
