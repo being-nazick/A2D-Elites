@@ -271,59 +271,75 @@ import logoIcon from './assets/logo.png';
     
    
     function markDelivered(id) {
-      const order = data.orders.find((item) => item.id === id);
-      if (!order) return;
-      setReturnModalOrder(order);
-    }
+          const order = data.orders.find((item) => item.id === id);
+          if (!order) return;
+
+          // Check if order contains milk products
+          const hasMilk = order.items && order.items.some(it => it.category === "Milk");
+
+          if (hasMilk) {
+            setReturnModalOrder(order);
+          } else {
+            // Directly mark as delivered without modal for non-milk orders
+            confirmDelivery(order.id, 0);
+          }
+        }
 
 
     function confirmDelivery(orderId, bottlesReturned) {
-      let deliveredOrder = null;
-      setData((prev) => {
-        const updatedOrders = prev.orders.map((o) => {
-          if (o.id === orderId) {
+          let deliveredOrder = null;
+          setData((prev) => {
+            const order = prev.orders.find((o) => o.id === orderId);
+            if (!order) return prev;
+
+            // Calculate actual milk bottles from THIS order's items
+            const actualMilkBottles = order.items
+              .filter(it => it.category === "Milk")
+              .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+
+            // Cap bottles returned to actual milk quantity
+            const validBottles = Math.min(Number(bottlesReturned) || 0, actualMilkBottles);
+
             deliveredOrder = {
-              ...o,
+              ...order,
               orderStatus: "Delivered",
-              bottlesReturned: Number(bottlesReturned) || 0,
+              bottlesReturned: validBottles,
             };
-            return deliveredOrder;
-          }
-          return o;
-        });
 
-        return {
-          ...prev,
-          orders: updatedOrders,
-        };
-      });
-
-      // Capture delivery location in background (non-blocking)
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            const lat = position.coords.latitude;
-            const lng = position.coords.longitude;
-            setData((prev) => ({
+            return {
               ...prev,
               orders: prev.orders.map((o) =>
-                o.id === orderId ? { ...o, latitude: lat, longitude: lng } : o
+                o.id === orderId ? deliveredOrder : o
               ),
-            }));
-          },
-          () => {}, // silently ignore errors for delivery location
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
-      }
+            };
+          });
 
-      // Close the modal
-      setReturnModalOrder(null);
+          // Capture delivery location in background (non-blocking)
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (position) => {
+                const lat = position.coords.latitude;
+                const lng = position.coords.longitude;
+                setData((prev) => ({
+                  ...prev,
+                  orders: prev.orders.map((o) =>
+                    o.id === orderId ? { ...o, latitude: lat, longitude: lng } : o
+                  ),
+                }));
+              },
+              () => {}, // silently ignore errors for delivery location
+              { enableHighAccuracy: true, timeout: 10000 }
+            );
+          }
 
-      // Send WhatsApp confirmation
-      if (deliveredOrder) {
-        openDeliveryWhatsApp(deliveredOrder);
-      }
-    }
+          // Close the modal
+          setReturnModalOrder(null);
+
+          // Send WhatsApp confirmation
+                if (deliveredOrder) {
+                  openDeliveryWhatsApp(deliveredOrder, data.orders);
+                }
+               }
 
     
     function markPaid(id) { update((d) => { const o = d.orders.find((o) => o.id === id); if (o) { o.paymentStatus = "Paid"; o.amountPaid = o.total; } return d; }); }
@@ -379,7 +395,8 @@ import logoIcon from './assets/logo.png';
             <DashboardView
               data={data} selectedDate={selectedDate} setSelectedDate={setSelectedDate}
               onAddOrder={() => setOrderModal({})}
-              onQuickAction={{ markDelivered, markPaid, edit: (o) => setOrderModal({ order: o }), del: deleteOrder }}
+              onQuickAction={{ markDelivered, markPaid, edit: (o) => setOrderModal({ order: o }), del: deleteOrder, orders: data.orders }}
+  
               onOpenCustomer={(c) => { setActiveCustomer(c); setTab("customers"); }}
               OrderRow={OrderRow} navBtnStyle={navBtnStyle}
             />
@@ -479,8 +496,8 @@ import logoIcon from './assets/logo.png';
           )}
           <ActionBtn onClick={() => generateBill(order)} icon={Download} label="Bill" tone={C.primary} toneSoft={C.primarySoft} />
           {order.phone && (
-            <ActionBtn onClick={() => openDeliveryWhatsApp(order)} icon={Phone} label="WhatsApp" tone={C.green} toneSoft={C.greenSoft} />
-          )}
+                        <ActionBtn onClick={() => openDeliveryWhatsApp(order, actions.orders)} icon={Phone} label="WhatsApp" tone={C.green} toneSoft={C.greenSoft} />
+                      )}
           <ActionBtn onClick={() => actions.edit(order)} icon={Edit2} label="Edit" tone={C.ink} toneSoft={C.cream} />
           <ActionBtn onClick={() => { if (window.confirm("Are you sure you want to delete this order?")) { actions.del(order.id); } }} icon={Trash2} label="Delete" tone={C.brick} toneSoft={C.brickSoft} />
         </div>
@@ -809,13 +826,15 @@ import logoIcon from './assets/logo.png';
     );
   }
 
-  function ProductsView({ data, onSave, onBack }) {
+    function ProductsView({ data, onSave, onBack }) {
     const [editing, setEditing] = useState(null);
+    const [showAdd, setShowAdd] = useState(false);
     return (
       <div>
         <div style={{ padding: "18px 16px 8px", display: "flex", alignItems: "center", gap: 10 }}>
           <button className="tap" onClick={onBack} style={navBtnStyle}><ArrowLeft size={16} /></button>
-          <div style={{ fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 600 }}>Products & Pricing</div>
+          <div style={{ fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 600, flex: 1 }}>Products & Pricing</div>
+          <button className="tap" onClick={() => setShowAdd(true)} style={{ background: C.primary, color: "#fff", border: "none", borderRadius: 12, padding: "8px 12px", fontWeight: 700, fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}><Plus size={14} />Add</button>
         </div>
         <div style={{ padding: "8px 16px 0", display: "flex", flexDirection: "column", gap: 8 }}>
           {data.products.map((p) => (
@@ -838,11 +857,96 @@ import logoIcon from './assets/logo.png';
             </div>
           ))}
         </div>
-        <div style={{ height: 16 }} />
+                <div style={{ height: 16 }} />
+        {showAdd && <AddProductModal onClose={() => setShowAdd(false)} onSave={(np) => { onSave(np); setShowAdd(false); }} existingIds={data.products.map((p) => p.id)} />}
       </div>
     );
   }
-  function InlineProductEdit({ product, onCancel, onSave }) {
+ function AddProductModal({ onClose, onSave, existingIds = [] }) {
+  const [name, setName] = useState("");
+  const [category, setCategory] = useState("Milk");
+  const [unit, setUnit] = useState("Bottle");
+  const [price, setPrice] = useState("");
+  
+  const categories = ["Milk", "Curd", "Paneer", "Ghee", "Butter", "Other"];
+  const units = ["Bottle", "Pack", "Kg", "g", "L", "ml", "Piece"];
+  
+  const canSave = name.trim() && Number(price) > 0;
+
+  function handleSave() {
+    const idBase = ("p_" + name.toLowerCase().replace(/[^a-z0-9]+/g, "_") + "_" + unit.toLowerCase()).replace(/_+/g, "_");
+    let id = idBase;
+    let n = 1;
+    while (existingIds.includes(id)) { 
+      id = idBase + "_" + (++n); 
+    }
+    onSave({ id, name: name.trim(), category, unit, price: Number(price), active: true });
+  }
+
+  return (
+    <ModalShell 
+      title="Add New Product" 
+      onClose={onClose} 
+      footer={
+        <div style={{ display: "flex", gap: 10 }}>
+          <button 
+            className="tap" 
+            onClick={onClose} 
+            style={{ flex: 1, background: C.cream, border: "none", borderRadius: 12, padding: "12px", fontWeight: 700, fontSize: 13, color: C.ink, cursor: "pointer" }}
+          >
+            Cancel
+          </button>
+          <button 
+            className="tap" 
+            onClick={handleSave} 
+            disabled={!canSave} 
+            style={{ 
+              flex: 2, 
+              background: canSave ? C.primary : C.inkMute, 
+              color: "#fff", 
+              border: "none", 
+              borderRadius: 12, 
+              padding: "12px", 
+              fontWeight: 700, 
+              fontSize: 13, 
+              display: "flex", 
+              alignItems: "center", 
+              justifyContent: "center", 
+              gap: 6,
+              opacity: canSave ? 1 : 0.6,
+              cursor: canSave ? "pointer" : "not-allowed"
+            }}
+          >
+            <Plus size={15} />Add Product
+          </button>
+        </div>
+      }
+    >
+      <Field label="Product Name">
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Milk Bottle (1000 ml)" style={inputStyle} />
+      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <Field label="Category">
+          <select value={category} onChange={(e) => setCategory(e.target.value)} style={inputStyle}>
+            {categories.map((c) => <option key={c} value={c}>{iconFor(c)} {c}</option>)}
+          </select>
+        </Field>
+        <Field label="Unit">
+          <select value={unit} onChange={(e) => setUnit(e.target.value)} style={inputStyle}>
+            {units.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Price (₹)">
+        <input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0" style={inputStyle} />
+      </Field>
+      <div style={{ background: C.primarySoft, border: `1px solid ${C.primarySoft}`, borderRadius: 12, padding: "10px 12px", fontSize: 12, color: C.primary, display: "flex", gap: 8, alignItems: "center" }}>
+        💡 New products appear immediately in Orders and Recurring.
+      </div>
+    </ModalShell>
+  );
+}
+ function InlineProductEdit({ product, onCancel, onSave }) {
     const [price, setPrice] = useState(product.price);
     return (
       <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 6 }}>

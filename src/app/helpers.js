@@ -49,17 +49,37 @@ export function openCustomerNavigation(customer) {
   if (!win) window.location.href = url;
 }
 
-export function openDeliveryWhatsApp(order) {
+export function openDeliveryWhatsApp(order, allOrders = []) {
   if (!order) return;
   const digits = String(order.phone || "").replace(/\D/g, "");
   if (!digits) return;
   const cleanDigits = digits.replace(/^0+/, "");
   const phone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
   const items = (order.items || []).map((item) => `${item.qty} × ${item.productName}`).join(", ");
+
+  // Calculate total pending for this customer from all orders
+  const customerPending = (allOrders || [])
+    .filter(o => o.customerId === order.customerId && o.paymentStatus !== "Paid" && o.orderStatus !== "Cancelled")
+    .reduce((sum, o) => sum + amountDue(o), 0);
+
+  // Calculate remaining bottles owed by customer from all orders
+  const bottlesOwed = (allOrders || [])
+    .filter(o => o.customerId === order.customerId && o.orderStatus !== "Cancelled")
+    .reduce((sum, o) => {
+      const delivered = (o.items || [])
+        .filter(it => it.category === "Milk")
+        .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+      const returned = Number(o.bottlesReturned) || 0;
+      return sum + delivered - returned;
+    }, 0);
+
+  const totalPendingText = customerPending > 0 ? `\n\nTotal Pending: ${fmtINR(customerPending)}` : "";
+  const bottlesText = bottlesOwed > 0 ? `\nBottles to Return: ${bottlesOwed}` : "";
+
   const due = amountDue(order);
   const payStatus = order.paymentStatus === "Paid" ? "Paid ✅" : `${order.paymentStatus} (Due: ${fmtINR(due)})`;
   const bottleText = order.bottlesReturned > 0 ? `\nEmpty Bottles Returned: ${order.bottlesReturned}` : "";
-  const message = `Hi ${order.customerName || "there"}, your order has been delivered! 🥛\n\nItems: ${items || "Dairy products"}\nTotal: ${fmtINR(order.total)}\nPayment: ${payStatus}${bottleText}\n\nThank you for choosing ${BUSINESS_NAME}!`;
+  const message = `Hi ${order.customerName || "there"}, your order has been delivered! 🥛\n\nItems: ${items || "Dairy products"}\nTotal: ${fmtINR(order.total)}\nPayment: ${payStatus}${totalPendingText}${bottleText}${bottlesText}\n\nThank you for choosing ${BUSINESS_NAME}!`;
   const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
   const win = window.open(url, "_blank");
   if (!win) window.location.href = url;
