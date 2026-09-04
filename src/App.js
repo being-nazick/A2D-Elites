@@ -1011,21 +1011,25 @@ import logoIcon from './assets/logo.png';
     }
 
     function handleSave() {
-      if (!customerName.trim()) { alert("Please enter a customer name."); return; }
-      if (items.length === 0) { alert("Add at least one product."); return; }
-      onSave({
-        id: initial?.id || uid("o"),
-        customerId: customerId || uid("c"),
-        customerName: customerName.trim(), phone, address, items,
-        orderDate, deliveryDate, paymentStatus,
-        amountPaid: paymentStatus === "Paid" ? total : Number(amountPaid) || 0,
-        orderStatus, notes, total,
-        bottlesReturned: Number(bottlesReturned) || 0,
-        latitude, longitude,
-        createdAt: initial?.createdAt || new Date().toISOString(),
-        recurringId: initial?.recurringId,
-      });
-    }
+          if (!customerName.trim()) { alert("Please enter a customer name."); return; }
+          if (items.length === 0) { alert("Add at least one product."); return; }
+          // Clamp partial payment between 0 and total to prevent invalid amounts
+          const safeAmountPaid = paymentStatus === "Paid"
+            ? total
+            : Math.min(Math.max(Number(amountPaid) || 0, 0), total);
+          onSave({
+            id: initial?.id || uid("o"),
+            customerId: customerId || uid("c"),
+            customerName: customerName.trim(), phone, address, items,
+            orderDate, deliveryDate, paymentStatus,
+            amountPaid: safeAmountPaid,
+            orderStatus, notes, total,
+            bottlesReturned: Number(bottlesReturned) || 0,
+            latitude, longitude,
+            createdAt: initial?.createdAt || new Date().toISOString(),
+            recurringId: initial?.recurringId,
+          });
+        }
 
     function handlePrint() {
       const draft = {
