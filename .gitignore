@@ -36,3 +36,11 @@ yarn-error.log*
 
 old_base64.txt
 changes_only.diff
+
+
+
+# Android Studio IDE local configs
+android/.idea/
+*.iml
+/.vscode/
+/src/diff file.txt
