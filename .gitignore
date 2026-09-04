@@ -11,6 +11,7 @@
 
 # Android Studio / IntelliJ
 android/.idea/
+android/local.properties
 *.iml
 
 # Gradle
