@@ -22,6 +22,11 @@ export const FONTS = `
 
 export const BUSINESS_NAME = "A2D'Elites";
 export const BUSINESS_TAGLINE = "Since 2025";
+export const BUSINESS_ADDRESS = "PLOT NO. 133 & 134, ASHOK METROVARAM, RAJIV GANDHI NAGAR, SIRUNGAVUR, Chennai, TAMIL NADU, 600097";
+export const BUSINESS_PHONE = "+919894886693";
+export const BUSINESS_EMAIL = "a2delites@gmail.com";
+export const UPI_ID = "a2delites@upi";
+export const UPI_PAYEE_NAME = "A2D Elites";
 
 export const DEFAULT_PRODUCTS = [
   { id: "p_milk_500ml", name: "Milk Bottle (500 ml)", category: "Milk", unit: "Bottle", price: 35, active: true },
@@ -35,3 +40,4 @@ export const DEFAULT_PRODUCTS = [
 export const EMPTY_DATA = { products: DEFAULT_PRODUCTS, customers: [], orders: [], recurring: [] };
 export const weekdayShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const CATEGORY_ICON = { Milk: "🥛", Paneer: "🧀", Curd: "🥣" };
+

@@ -496,6 +496,7 @@ export default function Dashboard({
             order={order}
             onOpenCustomer={onOpenCustomer}
             actions={onQuickAction}
+            data={data}
           />
         ))}
       </div>
