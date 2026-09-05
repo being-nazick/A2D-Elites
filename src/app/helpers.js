@@ -1,33 +1,68 @@
 import { BUSINESS_NAME } from "./constants";
 
-export const uid = (prefix = "id") => prefix + "_" + Math.random().toString(36).slice(2, 10);
-export const todayStr = () => new Date().toISOString().slice(0, 10);
-export const fmtINR = (value) => "₹" + Math.round(value || 0).toLocaleString("en-IN");
+export const uid = (prefix = "id") =>
+  prefix + "_" + Math.random().toString(36).slice(2, 10);
+export const todayStr = () => {
+  const date = new Date();
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+};
+export const fmtINR = (value) =>
+  "₹" + Math.round(value || 0).toLocaleString("en-IN");
 export const fmtDate = (iso) => {
   if (!iso) return "";
-  return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 };
-export const fmtDateShort = (iso) => new Date(iso + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+export const fmtDateShort = (iso) =>
+  new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+  });
 export const addDays = (iso, days) => {
-  const date = new Date(iso + "T00:00:00");
-  date.setDate(date.getDate() + days);
-  return date.toISOString().slice(0, 10);
+  const [year, month, day] = iso.split("-").map(Number); // Treat YYYY-MM-DD as a local calendar date. // Do NOT use toISOString() here because it converts to UTC // and can shift the date by one day in India/other timezones.
+  const date = new Date(year, month - 1, day);
+  date.setDate(date.getDate() + Number(days));
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
 };
 export const monthKey = (iso) => iso.slice(0, 7);
-export const iconFor = (category) => ({ Milk: "🥛", Paneer: "🧀", Curd: "🥣" }[category] || "🏷️");
+export const iconFor = (category) =>
+  ({ Milk: "🥛", Paneer: "🧀", Curd: "🥣" })[category] || "🏷️";
 
 export function orderTotal(items) {
-  const total = items.reduce((sum, item) => sum + (Number(item.qty) || 0) * (Number(item.price) || 0), 0);
+  const total = items.reduce(
+    (sum, item) => sum + (Number(item.qty) || 0) * (Number(item.price) || 0),
+    0,
+  );
   return Math.round((total + Number.EPSILON) * 100) / 100;
 }
 
 export function amountDue(order) {
-  if (!order || typeof order.total !== "number" || Number.isNaN(order.total)) return 0;
-  const paid = order.paymentStatus === "Paid" ? order.total : Number(order.amountPaid) || 0;
-  return Math.max(0, Math.round((order.total - paid + Number.EPSILON) * 100) / 100);
+  if (!order || typeof order.total !== "number" || Number.isNaN(order.total))
+    return 0;
+  const paid =
+    order.paymentStatus === "Paid"
+      ? order.total
+      : Number(order.amountPaid) || 0;
+  return Math.max(
+    0,
+    Math.round((order.total - paid + Number.EPSILON) * 100) / 100,
+  );
 }
 
-export const hasCoordinates = (place) => Number.isFinite(Number(place?.latitude)) && Number.isFinite(Number(place?.longitude)) && Number(place.latitude) !== 0 && Number(place.longitude) !== 0;
+export const hasCoordinates = (place) =>
+  Number.isFinite(Number(place?.latitude)) &&
+  Number.isFinite(Number(place?.longitude)) &&
+  Number(place.latitude) !== 0 &&
+  Number(place.longitude) !== 0;
 
 export function openCustomerRoute(customers) {
   const stops = customers.filter(hasCoordinates);
@@ -36,7 +71,10 @@ export function openCustomerRoute(customers) {
     return;
   }
   const destination = `${stops[stops.length - 1].latitude},${stops[stops.length - 1].longitude}`;
-  const waypoints = stops.slice(0, -1).map((customer) => `${customer.latitude},${customer.longitude}`).join("|");
+  const waypoints = stops
+    .slice(0, -1)
+    .map((customer) => `${customer.latitude},${customer.longitude}`)
+    .join("|");
   const url = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}${waypoints ? `&waypoints=${encodeURIComponent(waypoints)}` : ""}`;
   const win = window.open(url, "_blank");
   if (!win) window.location.href = url;
@@ -55,22 +93,32 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   if (!digits) return;
   const cleanDigits = digits.replace(/^0+/, "");
   const phone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
-  const items = (order.items || []).map((item) => `${item.qty} × ${item.productName}`).join(", ");
+  const items = (order.items || [])
+    .map((item) => `${item.qty} × ${item.productName}`)
+    .join(", ");
 
   // Total pending from OTHER unpaid orders (exclude this one to avoid double-count)
   const pendingFromOthers = (allOrders || [])
-    .filter(o => o.id !== order.id
-              && o.customerId === order.customerId
-              && o.orderStatus !== "Cancelled"
-              && o.paymentStatus !== "Paid")
+    .filter(
+      (o) =>
+        o.id !== order.id &&
+        o.customerId === order.customerId &&
+        o.orderStatus !== "Cancelled" &&
+        o.paymentStatus !== "Paid",
+    )
     .reduce((sum, o) => sum + amountDue(o), 0);
-    
+
   // Bottles still owed from OTHER orders
   const bottlesFromOthers = (allOrders || [])
-    .filter(o => o.id !== order.id && o.customerId === order.customerId && o.orderStatus !== "Cancelled")
+    .filter(
+      (o) =>
+        o.id !== order.id &&
+        o.customerId === order.customerId &&
+        o.orderStatus !== "Cancelled",
+    )
     .reduce((sum, o) => {
       const delivered = (o.items || [])
-        .filter(it => it.category === "Milk")
+        .filter((it) => it.category === "Milk")
         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
       const returned = Number(o.bottlesReturned) || 0;
       return sum + delivered - returned;
@@ -78,7 +126,7 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
 
   // Current order's bottle balance
   const currentDelivered = (order.items || [])
-    .filter(it => it.category === "Milk")
+    .filter((it) => it.category === "Milk")
     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
   const currentReturned = Number(order.bottlesReturned) || 0;
   const currentBottleNet = currentDelivered - currentReturned;
@@ -88,20 +136,22 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   const totalBottlesOwed = Math.max(0, bottlesFromOthers + currentBottleNet);
 
   // Payment line
-  const payStatus = order.paymentStatus === "Paid"
-    ? "Paid ✅"
-    : `${order.paymentStatus} (Due: ${fmtINR(amountDue(order))})`;
+  const payStatus =
+    order.paymentStatus === "Paid"
+      ? "Paid ✅"
+      : `${order.paymentStatus} (Due: ${fmtINR(amountDue(order))})`;
 
   // Optional extras
-  const pendingLine = totalCustomerPending > 0 && order.paymentStatus !== "Paid"
-    ? `\n\n💰 Total Pending: ${fmtINR(totalCustomerPending)}`
-    : "";
-  const returnedLine = currentReturned > 0
-    ? `\n✅ Empty Bottles Returned: ${currentReturned}`
-    : "";
-  const bottlesLine = totalBottlesOwed > 0
-    ? `\n🍼 Bottles to Return: ${totalBottlesOwed}`
-    : "";
+  const pendingLine =
+    totalCustomerPending > 0 && order.paymentStatus !== "Paid"
+      ? `\n\n💰 Total Pending: ${fmtINR(totalCustomerPending)}`
+      : "";
+  const returnedLine =
+    currentReturned > 0
+      ? `\n✅ Empty Bottles Returned: ${currentReturned}`
+      : "";
+  const bottlesLine =
+    totalBottlesOwed > 0 ? `\n🍼 Bottles to Return: ${totalBottlesOwed}` : "";
 
   const message =
     `Hi ${order.customerName}, your order has been delivered! 🥛\n\n` +
@@ -117,4 +167,3 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   const win = window.open(url, "_blank");
   if (!win) window.location.href = url;
 }
-
