@@ -20,7 +20,7 @@ import {
   Navigation,
   Route,
 } from "lucide-react";
-import { Dialog } from '@capacitor/dialog';
+import { Dialog } from "@capacitor/dialog";
 import {
   LineChart,
   Line,
@@ -246,7 +246,7 @@ function csvDownload(filename, rows) {
 
 //   return `
 //     <div style="font-family: sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; width: 400px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${colors.paperLine || "#ddd"}; border-radius: 8px;">
-      
+
 //       <!-- HEADER SECTION -->
 //       <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
 //         <div style="display: flex; gap: 12px; align-items: center;">
@@ -460,32 +460,34 @@ function csvDownload(filename, rows) {
 //   }
 // }
 
+/* ============================== PDF / BILL GENERATION ============================== */
+async function ensureHtml2Pdf() {
+  if (window.html2pdf) return;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src =
+      "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
 
-  /* ============================== PDF / BILL GENERATION ============================== */
-  async function ensureHtml2Pdf() {
-    if (window.html2pdf) return;
-    await new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
-      s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
-    });
+async function generateBill(order) {
+  try {
+    await ensureHtml2Pdf();
+  } catch (e) {
+    openPrintable(order);
+    return;
   }
 
-  async function generateBill(order) {
-    try {
-      await ensureHtml2Pdf();
-    } catch (e) {
-      openPrintable(order);
-      return;
-    }
-
-    const el = document.createElement("div");
-    el.style.width = "380px";
-    el.style.padding = "0";
-    el.style.fontFamily = "'DM Sans', sans-serif";
-    el.style.background = C.bg;
-    el.style.color = C.ink;
-    el.innerHTML = `
+  const el = document.createElement("div");
+  el.style.width = "380px";
+  el.style.padding = "0";
+  el.style.fontFamily = "'DM Sans', sans-serif";
+  el.style.background = C.bg;
+  el.style.color = C.ink;
+  el.innerHTML = `
       <div style="background:${C.primary}; color:#fff; padding:20px 18px 16px; border-radius:14px 14px 0 0;">
         <div style="display:flex; align-items:center; justify-content:space-between;">
           <div>
@@ -501,84 +503,103 @@ function csvDownload(filename, rows) {
           <div style="text-align:right;"><div style="font-size:10px; color:${C.inkMute}; text-transform:uppercase; letter-spacing:1px;">Date</div><div style="font-size:12px; font-weight:600; margin-top:3px;">${fmtDate(order.orderDate || todayStr())}</div></div>
         </div>
         <div style="background:${C.primarySoft}; color:${C.primaryDark}; padding:7px 9px; border-radius:7px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Order Summary</div>
-        ${order.items.map(it => `
+        ${order.items
+          .map(
+            (it) => `
           <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:10px 2px; border-bottom:1px solid ${C.paperLine};">
             <div style="max-width:65%;"><span style="color:${C.gold}; font-weight:700;">${it.qty} ×</span> ${it.productName}<div style="font-size:10px; color:${C.inkMute}; margin-top:2px;">${it.unit || "Unit"}</div></div>
-            <div style="text-align:right; font-weight:700; color:${C.primaryDark};">${fmtINR((it.qty||0)*(it.price||0))}</div>
+            <div style="text-align:right; font-weight:700; color:${C.primaryDark};">${fmtINR((it.qty || 0) * (it.price || 0))}</div>
           </div>
-        `).join("")}
-        <div style="display:flex; justify-content:space-between; align-items:center; background:${C.goldSoft}; color:${C.primaryDark}; padding:12px 10px; margin-top:14px; border-radius:9px; font-weight:700; font-size:15px;"><div>Total</div><div>${fmtINR(order.total|| order.items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.price)||0),0))}</div></div>
-        <div style="display:flex; gap:6px; margin-top:12px; font-size:10px; font-weight:700;"><span style="background:${C.greenSoft}; color:${C.green}; padding:5px 8px; border-radius:12px;">${order.orderStatus || 'Pending'}</span><span style="background:${C.brickSoft}; color:${C.brick}; padding:5px 8px; border-radius:12px;">${order.paymentStatus || 'Pending'}</span></div>
+        `,
+          )
+          .join("")}
+        <div style="display:flex; justify-content:space-between; align-items:center; background:${C.goldSoft}; color:${C.primaryDark}; padding:12px 10px; margin-top:14px; border-radius:9px; font-weight:700; font-size:15px;"><div>Total</div><div>${fmtINR(order.total || order.items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0))}</div></div>
+        <div style="display:flex; gap:6px; margin-top:12px; font-size:10px; font-weight:700;"><span style="background:${C.greenSoft}; color:${C.green}; padding:5px 8px; border-radius:12px;">${order.orderStatus || "Pending"}</span><span style="background:${C.brickSoft}; color:${C.brick}; padding:5px 8px; border-radius:12px;">${order.paymentStatus || "Pending"}</span></div>
         <div style="text-align:center; font-size:10px; color:${C.inkMute}; margin-top:16px;">Thank you for your purchase!</div>
       </div>
     `;
 
-    document.body.appendChild(el);
-    try {
-      const filename = `bill-${order.id || 'invoice'}.pdf`;
-      const opt = { margin: 8, filename, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' } };
-      const pdfDataUri = await window.html2pdf().set(opt).from(el).outputPdf('datauristring');
-      const base64 = pdfDataUri.split(',')[1];
-      const file = await Filesystem.writeFile({
-        path: filename,
-        data: base64,
-        directory: Directory.Cache,
-        recursive: true,
-      });
-      document.body.removeChild(el);
-      await Share.share({
-        title: 'Dairy bill',
-        text: `Bill for ${order.customerName || 'customer'}`,
-        url: file.uri,
-        dialogTitle: 'Share or print bill',
-      });
-    } catch (e) {
-      if (el.parentNode) document.body.removeChild(el);
-      openPrintable(order);
-    }
+  document.body.appendChild(el);
+  try {
+    const filename = `bill-${order.id || "invoice"}.pdf`;
+    const opt = {
+      margin: 8,
+      filename,
+      image: { type: "jpeg", quality: 0.98 },
+      html2canvas: { scale: 2 },
+      jsPDF: { unit: "mm", format: "a5", orientation: "portrait" },
+    };
+    const pdfDataUri = await window
+      .html2pdf()
+      .set(opt)
+      .from(el)
+      .outputPdf("datauristring");
+    const base64 = pdfDataUri.split(",")[1];
+    const file = await Filesystem.writeFile({
+      path: filename,
+      data: base64,
+      directory: Directory.Cache,
+      recursive: true,
+    });
+    document.body.removeChild(el);
+    await Share.share({
+      title: "Dairy bill",
+      text: `Bill for ${order.customerName || "customer"}`,
+      url: file.uri,
+      dialogTitle: "Share or print bill",
+    });
+  } catch (e) {
+    if (el.parentNode) document.body.removeChild(el);
+    openPrintable(order);
   }
+}
 
-  function openPrintable(order) {
-    const billMarkup = `
+function openPrintable(order) {
+  const billMarkup = `
       <div style="font-family: 'DM Sans', sans-serif; padding:18px; color:${C.ink}">
         <h2 style="margin:0">${BUSINESS_NAME}</h2>
         <div style="color:${C.inkMute}">${BUSINESS_TAGLINE}</div>
         <hr />
-        <div>Customer: <b>${order.customerName || ''}</b></div>
-        ${order.items.map((it) => `<div style="display:flex; justify-content:space-between; margin-top:8px"><div>${it.qty} × ${it.productName}</div><div>${fmtINR((it.qty || 0) * (it.price || 0))}</div></div>`).join('')}
+        <div>Customer: <b>${order.customerName || ""}</b></div>
+        ${order.items.map((it) => `<div style="display:flex; justify-content:space-between; margin-top:8px"><div>${it.qty} × ${it.productName}</div><div>${fmtINR((it.qty || 0) * (it.price || 0))}</div></div>`).join("")}
         <hr />
         <div style="font-weight:700; display:flex; justify-content:space-between"><div>Total</div><div>${fmtINR(order.total || 0)}</div></div>
       </div>`;
 
-    const w = window.open('', '_blank');
-    if (w) {
-      w.document.write(`<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`);
-      w.document.close();
-      w.onload = () => { w.focus(); w.print(); };
-      return;
-    }
-
-    // Android WebView may block window.open, so print through a hidden iframe.
-    const frame = document.createElement('iframe');
-    frame.style.position = 'fixed';
-    frame.style.width = '1px';
-    frame.style.height = '1px';
-    frame.style.right = '0';
-    frame.style.bottom = '0';
-    frame.style.border = '0';
-    document.body.appendChild(frame);
-    const frameDocument = frame.contentDocument || frame.contentWindow.document;
-    frameDocument.open();
-    frameDocument.write(`<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`);
-    frameDocument.close();
-    frame.onload = () => {
-      frame.contentWindow.focus();
-      frame.contentWindow.print();
-      setTimeout(() => frame.remove(), 1000);
+  const w = window.open("", "_blank");
+  if (w) {
+    w.document.write(
+      `<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`,
+    );
+    w.document.close();
+    w.onload = () => {
+      w.focus();
+      w.print();
     };
+    return;
   }
 
-
+  // Android WebView may block window.open, so print through a hidden iframe.
+  const frame = document.createElement("iframe");
+  frame.style.position = "fixed";
+  frame.style.width = "1px";
+  frame.style.height = "1px";
+  frame.style.right = "0";
+  frame.style.bottom = "0";
+  frame.style.border = "0";
+  document.body.appendChild(frame);
+  const frameDocument = frame.contentDocument || frame.contentWindow.document;
+  frameDocument.open();
+  frameDocument.write(
+    `<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`,
+  );
+  frameDocument.close();
+  frame.onload = () => {
+    frame.contentWindow.focus();
+    frame.contentWindow.print();
+    setTimeout(() => frame.remove(), 1000);
+  };
+}
 
 /* ============================== ROOT APP ============================== */
 export default function App() {
@@ -837,53 +858,6 @@ export default function App() {
         )}
       </div>
 
-      {/* Temporary Bill Generation Test Trigger */}
-<div style={{ position: "fixed", bottom: 95, right: 16, zIndex: 1000 }}>
-  <button
-    onClick={() => {
-      const sampleOrder = {
-        id: "ORD-TEST-01",
-        invoiceNo: "INV-999999",
-        customerName: "Ramesh Kumar",
-        phone: "9876543210",
-        customerAddress: "45, Anna Nagar, Chennai",
-        orderDate: new Date().toISOString().split("T")[0],
-        items: [
-          { productName: "Cow Milk (500ml)", price: 30, qty: 2, unit: "PCS", category: "Milk" },
-          { productName: "Curd (200g)", price: 20, qty: 1, unit: "PCS", category: "Dairy" }
-        ],
-        amountPaid: 40,
-        bottlesReturned: 1,
-        bankName: "Indian Bank",
-        accountHolder: "Deena Dhayalan R",
-        accountNumber: "7084125477",
-        ifscCode: "IDIB000M206",
-        bankBranch: "MKB Nagar"
-      };
-
-      // Calls your print/preview function with empty array fallbacks for orders and customers
-      if (typeof openPrintable === "function") {
-        openPrintable(sampleOrder, data?.orders || [], data?.customers || []);
-      } else {
-        console.error("openPrintable function is not defined in scope.");
-      }
-    }}
-    style={{
-      background: "#2e7d32",
-      color: "#fff",
-      border: "none",
-      padding: "10px 16px",
-      borderRadius: "20px",
-      fontWeight: "700",
-      fontSize: "12px",
-      boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
-      cursor: "pointer"
-    }}
-  >
-    🖨️ Test Bill PDF
-  </button>
-</div>
-
       <SharedBottomNav tab={tab} setTab={setTab} badge={pendingDeliveries} />
 
       {orderModal && (
@@ -1060,9 +1034,7 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
           />
         )}
         <ActionBtn
-          onClick={() =>
-            generateBill(order, data?.orders || [], data?.customers || [])
-          }
+          onClick={() => generateBill(order)}
           icon={Download}
           label="Bill"
           tone={C.primary}
@@ -3013,7 +2985,7 @@ function OrderModal({
     });
   }
 
-    function handlePrint() {
+  function handlePrint() {
     const draft = {
       id: initial?.id || uid("o"),
       customerId: customerId || uid("c"),
@@ -3030,7 +3002,7 @@ function OrderModal({
       total,
       createdAt: initial?.createdAt || new Date().toISOString(),
     };
-    generateBill(draft, [draft], customers);
+    generateBill(draft);
   }
 
   return (
