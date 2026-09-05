@@ -1,4 +1,4 @@
-import logoIcon from './assets/logo.png';
+﻿import logoIcon from './assets/logo.png';
   import React, { useState, useEffect, useMemo } from "react";
   import {
       Plus, Package, Clock,
@@ -16,6 +16,7 @@ import logoIcon from './assets/logo.png';
   import { useCapacitorStorage } from "./app/storage";
   import { uid, todayStr, fmtINR, fmtDate, fmtDateShort, monthKey, iconFor, orderTotal, amountDue, hasCoordinates, openCustomerRoute, openDeliveryWhatsApp } from "./app/helpers";
   import { AppHeader as SharedAppHeader, BottomNav as SharedBottomNav, TopBar as SharedTopBar, Chip, QtyLine, StatusPill } from "./components/Shared";
+import LocationPicker from "./components/LocationPicker";
   import DashboardView from "./features/dashboard/Dashboard";
   import OrdersView from "./features/orders/OrdersTab";
 
@@ -270,77 +271,51 @@ import logoIcon from './assets/logo.png';
     function deleteOrder(id) { update((d) => { d.orders = d.orders.filter((o) => o.id !== id); return d; }); }
     
    
-    function markDelivered(id) {
-          const order = data.orders.find((item) => item.id === id);
-          if (!order) return;
+function markDelivered(id) {
+    const order = data.orders.find((item) => item.id === id);
+    if (!order) return;
 
-          // Check if order contains milk products
-          const hasMilk = order.items && order.items.some(it => it.category === "Milk");
+    // Calculate actual milk quantity to ensure we only trigger the modal for genuine milk orders
+    const actualMilkBottles = (order.items || [])
+      .filter(it => it.category === "Milk")
+      .reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
-          if (hasMilk) {
-            setReturnModalOrder(order);
-          } else {
-            // Directly mark as delivered without modal for non-milk orders
-            confirmDelivery(order.id, 0);
-          }
-        }
+    if (actualMilkBottles > 0) {
+      setReturnModalOrder(order);
+    } else {
+      // Directly mark as delivered without modal for non-milk orders
+      confirmDelivery(order.id, 0);
+    }
+  }
 
+  function confirmDelivery(orderId, bottlesReturned) {
+    let deliveredOrder = null;
+    setData((prev) => {
+      const order = prev.orders.find((o) => o.id === orderId);
+      if (!order) return prev;
 
-    function confirmDelivery(orderId, bottlesReturned) {
-          let deliveredOrder = null;
-          setData((prev) => {
-            const order = prev.orders.find((o) => o.id === orderId);
-            if (!order) return prev;
+      // Calculate actual milk bottles from THIS order's items
+      const actualMilkBottles = (order.items || [])
+        .filter(it => it.category === "Milk")
+        .reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
-            // Calculate actual milk bottles from THIS order's items
-            const actualMilkBottles = order.items
-              .filter(it => it.category === "Milk")
-              .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+      // Cap bottles returned to actual milk quantity
+      const validBottles = Math.min(Number(bottlesReturned) || 0, actualMilkBottles);
 
-            // Cap bottles returned to actual milk quantity
-            const validBottles = Math.min(Number(bottlesReturned) || 0, actualMilkBottles);
+      deliveredOrder = {
+        ...order,
+        orderStatus: "Delivered",
+        bottlesReturned: validBottles,
+      };
 
-            deliveredOrder = {
-              ...order,
-              orderStatus: "Delivered",
-              bottlesReturned: validBottles,
-            };
-
-            return {
-              ...prev,
-              orders: prev.orders.map((o) =>
-                o.id === orderId ? deliveredOrder : o
-              ),
-            };
-          });
-
-          // Capture delivery location in background (non-blocking)
-          if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-              (position) => {
-                const lat = position.coords.latitude;
-                const lng = position.coords.longitude;
-                setData((prev) => ({
-                  ...prev,
-                  orders: prev.orders.map((o) =>
-                    o.id === orderId ? { ...o, latitude: lat, longitude: lng } : o
-                  ),
-                }));
-              },
-              () => {}, // silently ignore errors for delivery location
-              { enableHighAccuracy: true, timeout: 10000 }
-            );
-          }
-
-          // Close the modal
-          setReturnModalOrder(null);
-
-          // Send WhatsApp confirmation
-                if (deliveredOrder) {
-                  openDeliveryWhatsApp(deliveredOrder, data.orders);
-                }
-               }
-
+      return {
+        ...prev,
+        orders: prev.orders.map((o) =>
+          o.id === orderId ? deliveredOrder : o
+        ),
+      };
+    });
+  }
     
     function markPaid(id) { update((d) => { const o = d.orders.find((o) => o.id === id); if (o) { o.paymentStatus = "Paid"; o.amountPaid = o.total; } return d; }); }
 
@@ -1177,8 +1152,9 @@ import logoIcon from './assets/logo.png';
         </div>
         <Field label="Delivery Address"><input style={inputStyle} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="House / street / area" /></Field>
 
-        <Field label="📍 Delivery Location (GPS)">
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        {/* <Field label="📍 Delivery Location (GPS)"> */}
+        <Field label=" Delivery Location">
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button className="tap" onClick={handleGetLocation} disabled={locLoading} style={{
               background: latitude && longitude ? C.greenSoft : C.cream,
               color: latitude && longitude ? C.green : C.primary,
@@ -1188,16 +1164,20 @@ import logoIcon from './assets/logo.png';
               display: "flex", alignItems: "center", gap: 6,
             }}>
               <MapPin size={14} />
-              {locLoading ? "Getting..." : latitude && longitude ? "📍 Captured" : "Get Location"}
+              {locLoading ? "Getting..." : latitude && longitude ? "Captured" : "Get Location"}
             </button>
-            {latitude && longitude ? (
-              <a href={`https://www.google.com/maps?q=${latitude},${longitude}`} target="_blank" rel="noreferrer"
-                style={{ fontSize: 11.5, color: C.primary, textDecoration: "underline" }}>
+            {latitude && longitude && (
+              <span style={{ fontSize: 11.5, color: C.primary }}>
                 {latitude.toFixed(5)}, {longitude.toFixed(5)}
-              </a>
-            ) : (
-              <span style={{ fontSize: 11.5, color: C.inkMute }}>Tap to capture GPS coordinates</span>
+              </span>
             )}
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <LocationPicker
+              latitude={latitude}
+              longitude={longitude}
+              onChange={({ latitude: lat, longitude: lng }) => { setLatitude(lat); setLongitude(lng); }}
+            />
           </div>
         </Field>
 
@@ -1248,7 +1228,6 @@ import logoIcon from './assets/logo.png';
       </ModalShell>
     );
   }
-
   /* ============================== CUSTOMER MODAL ============================== */
   function CustomerModal({ initial, onClose, onSave }) {
     const [name, setName] = useState(initial?.name || "");
@@ -1281,12 +1260,23 @@ import logoIcon from './assets/logo.png';
         <Field label="Phone"><input style={inputStyle} value={phone} onChange={(e) => setPhone(e.target.value)} /></Field>
         <Field label="Address"><input style={inputStyle} value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
         <Field label="Customer GPS Location">
+        <Field label="Customer Location">
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button className="tap" onClick={handleGetLocation} disabled={locLoading} style={{ background: hasCoordinates({ latitude, longitude }) ? C.greenSoft : C.cream, color: hasCoordinates({ latitude, longitude }) ? C.green : C.primary, border: `1px solid ${hasCoordinates({ latitude, longitude }) ? C.green : C.primary}`, borderRadius: 10, padding: "9px 12px", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, opacity: locLoading ? 0.6 : 1 }}>
               <MapPin size={14} /> {locLoading ? "Getting..." : hasCoordinates({ latitude, longitude }) ? "Update GPS" : "Get GPS"}
             </button>
-            <span style={{ fontSize: 11.5, color: C.inkMute }}>{hasCoordinates({ latitude, longitude }) ? `${Number(latitude).toFixed(5)}, ${Number(longitude).toFixed(5)}` : "Capture while at the customer's address"}</span>
+            {hasCoordinates({ latitude, longitude }) && (
+              <span style={{ fontSize: 11.5, color: C.inkMute }}>{Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}</span>
+            )}
           </div>
+          <div style={{ marginTop: 10 }}>
+            <LocationPicker
+              latitude={latitude}
+              longitude={longitude}
+              onChange={({ latitude: lat, longitude: lng }) => { setLatitude(lat); setLongitude(lng); }}
+            />
+          </div>
+        </Field>
         </Field>
       </ModalShell>
     );

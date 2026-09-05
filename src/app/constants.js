@@ -25,6 +25,7 @@ export const BUSINESS_TAGLINE = "Since 2025";
 
 export const DEFAULT_PRODUCTS = [
   { id: "p_milk_500ml", name: "Milk Bottle (500 ml)", category: "Milk", unit: "Bottle", price: 35, active: true },
+  { id: "p_milk_1000ml", name: "Milk Bottle (1000 ml)", category: "Milk", unit: "Bottle", price: 65, active: true },
   { id: "p_curd_500g", name: "Curd (500 g)", category: "Curd", unit: "Pack", price: 50, active: true },
   { id: "p_curd_1kg", name: "Curd (1 kg)", category: "Curd", unit: "Pack", price: 100, active: true },
   { id: "p_paneer_200g", name: "Paneer (200 g)", category: "Paneer", unit: "Pack", price: 110, active: true },

@@ -57,14 +57,17 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   const phone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
   const items = (order.items || []).map((item) => `${item.qty} × ${item.productName}`).join(", ");
 
-  // Calculate total pending for this customer from all orders
-  const customerPending = (allOrders || [])
-    .filter(o => o.customerId === order.customerId && o.paymentStatus !== "Paid" && o.orderStatus !== "Cancelled")
+  // Total pending from OTHER unpaid orders (exclude this one to avoid double-count)
+  const pendingFromOthers = (allOrders || [])
+    .filter(o => o.id !== order.id
+              && o.customerId === order.customerId
+              && o.orderStatus !== "Cancelled"
+              && o.paymentStatus !== "Paid")
     .reduce((sum, o) => sum + amountDue(o), 0);
-
-  // Calculate remaining bottles owed by customer from all orders
-  const bottlesOwed = (allOrders || [])
-    .filter(o => o.customerId === order.customerId && o.orderStatus !== "Cancelled")
+    
+  // Bottles still owed from OTHER orders
+  const bottlesFromOthers = (allOrders || [])
+    .filter(o => o.id !== order.id && o.customerId === order.customerId && o.orderStatus !== "Cancelled")
     .reduce((sum, o) => {
       const delivered = (o.items || [])
         .filter(it => it.category === "Milk")
@@ -73,14 +76,45 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
       return sum + delivered - returned;
     }, 0);
 
-  const totalPendingText = customerPending > 0 ? `\n\nTotal Pending: ${fmtINR(customerPending)}` : "";
-  const bottlesText = bottlesOwed > 0 ? `\nBottles to Return: ${bottlesOwed}` : "";
+  // Current order's bottle balance
+  const currentDelivered = (order.items || [])
+    .filter(it => it.category === "Milk")
+    .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+  const currentReturned = Number(order.bottlesReturned) || 0;
+  const currentBottleNet = currentDelivered - currentReturned;
 
-  const due = amountDue(order);
-  const payStatus = order.paymentStatus === "Paid" ? "Paid ✅" : `${order.paymentStatus} (Due: ${fmtINR(due)})`;
-  const bottleText = order.bottlesReturned > 0 ? `\nEmpty Bottles Returned: ${order.bottlesReturned}` : "";
-  const message = `Hi ${order.customerName || "there"}, your order has been delivered! 🥛\n\nItems: ${items || "Dairy products"}\nTotal: ${fmtINR(order.total)}\nPayment: ${payStatus}${totalPendingText}${bottleText}${bottlesText}\n\nThank you for choosing ${BUSINESS_NAME}!`;
+  // Totals
+  const totalCustomerPending = pendingFromOthers + amountDue(order);
+  const totalBottlesOwed = Math.max(0, bottlesFromOthers + currentBottleNet);
+
+  // Payment line
+  const payStatus = order.paymentStatus === "Paid"
+    ? "Paid ✅"
+    : `${order.paymentStatus} (Due: ${fmtINR(amountDue(order))})`;
+
+  // Optional extras
+  const pendingLine = totalCustomerPending > 0 && order.paymentStatus !== "Paid"
+    ? `\n\n💰 Total Pending: ${fmtINR(totalCustomerPending)}`
+    : "";
+  const returnedLine = currentReturned > 0
+    ? `\n✅ Empty Bottles Returned: ${currentReturned}`
+    : "";
+  const bottlesLine = totalBottlesOwed > 0
+    ? `\n🍼 Bottles to Return: ${totalBottlesOwed}`
+    : "";
+
+  const message =
+    `Hi ${order.customerName}, your order has been delivered! 🥛\n\n` +
+    `Items: ${items || "Dairy products"}\n` +
+    `Total: ${fmtINR(order.total)}\n` +
+    `Payment: ${payStatus}` +
+    `${pendingLine}` +
+    `${returnedLine}` +
+    `${bottlesLine}\n\n` +
+    `Thank you for choosing ${BUSINESS_NAME}!`;
+
   const url = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
   const win = window.open(url, "_blank");
   if (!win) window.location.href = url;
 }
+
