@@ -1,4 +1,4 @@
-﻿import logoIcon from "./assets/logo.png";
+import logoIcon from "./assets/logo.png";
 import signatureImg from "./assets/signature.png";
 import React, { useState, useEffect, useMemo } from "react";
 import {
@@ -46,7 +46,8 @@ import {
   BUSINESS_ADDRESS,
   BUSINESS_PHONE,
   BUSINESS_EMAIL,
-  UPI_ID
+  UPI_ID,
+  UPI_PAYEE_NAME,
 } from "./app/constants";
 import { useCapacitorStorage } from "./app/storage";
 import {
@@ -166,299 +167,419 @@ function csvDownload(filename, rows) {
   URL.revokeObjectURL(url);
 }
 
-/* ============================== PDF / BILL GENERATION ============================== */
+// /* ============================== PDF / BILL GENERATION ============================== */
 
-async function ensureHtml2Pdf() {
-  if (window.html2pdf) return;
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src =
-      "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-}
+// async function ensureHtml2Pdf() {
+//   if (window.html2pdf) return;
+//   await new Promise((resolve, reject) => {
+//     const s = document.createElement("script");
+//     s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
+//     s.onload = resolve;
+//     s.onerror = reject;
+//     document.head.appendChild(s);
+//   });
+// }
 
-function buildBillMarkup(order, allOrders = [], customers = []) {
-  // 1. Customer & Contact lookup
-  const customer = customers?.find((c) => c.id === order.customerId) || null;
-  const deliveryAddress =
-    customer?.address || order.customerAddress || order.address || "—";
-  const contactPhone = customer?.phone || order.phone || "—";
+// function buildBillMarkup(order, allOrders = [], customers = []) {
+//   const _fmtINR = typeof fmtINR === "function" ? fmtINR : (v) => `₹${Number(v || 0).toFixed(2)}`;
+//   const _fmtDate = typeof fmtDate === "function" ? fmtDate : (d) => d || new Date().toISOString().split("T")[0];
+//   const _todayStr = typeof todayStr === "function" ? todayStr() : new Date().toISOString().split("T")[0];
 
-  // 2. Financial calculations
-  const totalAmount =
-    order.total ||
-    (order.items || []).reduce(
-      (sum, it) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
-      0,
-    );
-  const amountPaid = Number(order.amountPaid) || 0;
-  const balanceDue = Math.max(0, totalAmount - amountPaid);
-  const totalQty = (order.items || []).reduce(
-    (sum, item) => sum + (Number(item.qty) || 0),
-    0,
-  );
+//   const bizName = typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : "A2D'Elites";
+//   const bizTagline = typeof BUSINESS_TAGLINE !== "undefined" ? BUSINESS_TAGLINE : "SINCE 2025";
+//   const bizAddress = typeof BUSINESS_ADDRESS !== "undefined" ? BUSINESS_ADDRESS : "";
+//   const bizPhone = typeof BUSINESS_PHONE !== "undefined" ? BUSINESS_PHONE : "";
+//   const bizEmail = typeof BUSINESS_EMAIL !== "undefined" ? BUSINESS_EMAIL : "";
+//   const upiId = typeof UPI_ID !== "undefined" ? UPI_ID : "";
+//   const upiPayee = typeof UPI_PAYEE_NAME !== "undefined" ? UPI_PAYEE_NAME : bizName;
+//   const colors = typeof C !== "undefined" ? C : {};
+//   const sigImg = typeof signatureImg !== "undefined" ? signatureImg : "";
 
-  // 3. Cross-order empty bottle tracking
-  const pastBottles = (allOrders || [])
-    .filter(
-      (o) =>
-        o.customerId === order.customerId &&
-        o.orderStatus !== "Cancelled" &&
-        o.id !== order.id,
-    )
-    .reduce((sum, o) => {
-      const delivered = (o.items || [])
-        .filter((it) => it.category === "Milk")
-        .reduce((s, it) => s + (Number(it.qty) || 0), 0);
-      const returned = Number(o.bottlesReturned) || 0;
-      return sum + delivered - returned;
-    }, 0);
+//   const customer = customers?.find((c) => c.id === order.customerId) || null;
+//   const deliveryAddress = customer?.address || order.customerAddress || order.address || "—";
+//   const contactPhone = customer?.phone || order.phone || "—";
 
-  const currentDelivered = (order.items || [])
-    .filter((it) => it.category === "Milk")
-    .reduce((s, it) => s + (Number(it.qty) || 0), 0);
-  const currentReturned = Number(order.bottlesReturned) || 0;
-  const totalRemainingBottles = Math.max(
-    0,
-    pastBottles + (currentDelivered - currentReturned),
-  );
+//   const totalAmount =
+//     order.total ||
+//     (order.items || []).reduce(
+//       (sum, it) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
+//       0,
+//     );
+//   const amountPaid = Number(order.amountPaid) || 0;
+//   const balanceDue = Math.max(0, totalAmount - amountPaid);
+//   const totalQty = (order.items || []).reduce(
+//     (sum, item) => sum + (Number(item.qty) || 0),
+//     0,
+//   );
 
-  const invoiceNo =
-    order.invoiceNo ||
-    `INV-${(order.id || "XXXXX").toString().toUpperCase().slice(-6)}`;
+//   const pastBottles = (allOrders || [])
+//     .filter(
+//       (o) =>
+//         o.customerId === order.customerId &&
+//         o.orderStatus !== "Cancelled" &&
+//         o.id !== order.id,
+//     )
+//     .reduce((sum, o) => {
+//       const delivered = (o.items || [])
+//         .filter((it) => it.category === "Milk")
+//         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+//       const returned = Number(o.bottlesReturned) || 0;
+//       return sum + delivered - returned;
+//     }, 0);
 
-  const bizAddress =
-    typeof BUSINESS_ADDRESS !== "undefined" ? BUSINESS_ADDRESS : "";
-  const bizPhone = typeof BUSINESS_PHONE !== "undefined" ? BUSINESS_PHONE : "";
-  const bizEmail = typeof BUSINESS_EMAIL !== "undefined" ? BUSINESS_EMAIL : "";
+//   const currentDelivered = (order.items || [])
+//     .filter((it) => it.category === "Milk")
+//     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+//   const currentReturned = Number(order.bottlesReturned) || 0;
+//   const totalRemainingBottles = Math.max(
+//     0,
+//     pastBottles + (currentDelivered - currentReturned),
+//   );
 
-  return `
-    <div style="font-family: 'DM Sans', sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; max-width: 500px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${C.paperLine || "#ddd"}; border-radius: 8px;">
+//   const invoiceNo =
+//     order.invoiceNo ||
+//     `INV-${(order.id || "XXXXX").toString().toUpperCase().slice(-6)}`;
+
+//   const upiQrUrl = upiId
+//     ? `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`upi://pay?pa=${upiId}&pn=${upiPayee}&am=${balanceDue}&cu=INR`)}`
+//     : "";
+
+//   return `
+//     <div style="font-family: sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; width: 400px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${colors.paperLine || "#ddd"}; border-radius: 8px;">
       
-      <!-- HEADER SECTION -->
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
-        <div style="display: flex; gap: 12px; align-items: center;">
-          ${order.qrCodeUrl ? `<img src="${order.qrCodeUrl}" style="width: 60px; height: 60px;" alt="QR" />` : ""}
+//       <!-- HEADER SECTION -->
+//       <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
+//         <div style="display: flex; gap: 12px; align-items: center;">
+//           ${order.qrCodeUrl ? `<img src="${order.qrCodeUrl}" style="width: 50px; height: 50px;" alt="QR" />` : ""}
+//           <div>
+//             <h1 style="font-size: 16px; font-weight: 800; margin: 0; text-transform: uppercase;">${bizName}</h1>
+//             <div style="font-size: 9px; color: #555; text-transform: uppercase;">${bizTagline}</div>
+//             <div style="font-size: 9px; color: #444; margin-top: 4px; line-height: 1.3;">
+//               ${bizAddress ? `<div>${bizAddress}</div>` : ""}
+//               ${bizPhone || bizEmail ? `<div>Ph: ${bizPhone} ${bizEmail ? `| ${bizEmail}` : ""}</div>` : ""}
+//             </div>
+//           </div>
+//         </div>
+//         <div style="text-align: right;">
+//           <h2 style="font-size: 18px; margin: 0; font-weight: 900; letter-spacing: 1px;">INVOICE</h2>
+//           <span style="display: inline-block; background: #eee; border: 1px solid #ccc; font-size: 8px; font-weight: 700; padding: 2px 6px; margin-top: 4px;">
+//             ${order.copyType || "ORIGINAL"}
+//           </span>
+//         </div>
+//       </div>
+
+//       <!-- METADATA GRID -->
+//       <div style="display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 10px;">
+//         <div style="width: 55%;">
+//           <div style="font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 2px;">Billing Address:</div>
+//           <div style="font-weight: 700; font-size: 11px;">${order.customerName || customer?.name || "—"}</div>
+//           <div style="color: #333; line-height: 1.3;">${deliveryAddress}</div>
+//           <div style="color: #333; margin-top: 2px;">Ph: ${contactPhone}</div>
+//         </div>
+//         <div style="width: 40%; text-align: right; line-height: 1.4;">
+//           <div><b>Invoice #:</b> ${invoiceNo}</div>
+//           <div><b>Invoice Date:</b> ${_fmtDate(_todayStr)}</div>
+//           <div><b>Order Date:</b> ${_fmtDate(order.orderDate || _todayStr)}</div>
+//         </div>
+//       </div>
+
+//       <!-- LINE ITEMS TABLE -->
+//       <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px;">
+//         <thead>
+//           <tr style="background: #f4f4f4; border-top: 1px solid #111; border-bottom: 1px solid #111; text-align: left;">
+//             <th style="padding: 6px; width: 5%;">#</th>
+//             <th style="padding: 6px;">Item</th>
+//             <th style="padding: 6px; text-align: right;">Rate</th>
+//             <th style="padding: 6px; text-align: center;">Qty</th>
+//             <th style="padding: 6px; text-align: right;">Amount</th>
+//           </tr>
+//         </thead>
+//         <tbody>
+//           ${(order.items || [])
+//             .map(
+//               (it, idx) => `
+//             <tr style="border-bottom: 1px solid #eee;">
+//               <td style="padding: 6px;">${idx + 1}</td>
+//               <td style="padding: 6px; font-weight: 600;">${it.productName || it.name || "Item"}</td>
+//               <td style="padding: 6px; text-align: right;">${_fmtINR(it.price || 0)}</td>
+//               <td style="padding: 6px; text-align: center;">${it.qty || 0} ${it.unit || "PCS"}</td>
+//               <td style="padding: 6px; text-align: right; font-weight: 600;">${_fmtINR((it.qty || 0) * (it.price || 0))}</td>
+//             </tr>
+//           `,
+//             )
+//             .join("")}
+//           <tr style="border-top: 1px solid #111; font-weight: 600;">
+//             <td colspan="4" style="padding: 6px; text-align: right;">Subtotal</td>
+//             <td style="padding: 6px; text-align: right;">${_fmtINR(totalAmount)}</td>
+//           </tr>
+//           ${
+//             amountPaid > 0
+//               ? `
+//           <tr style="color: #2e7d32;">
+//             <td colspan="4" style="padding: 4px 6px; text-align: right;">Amount Paid</td>
+//             <td style="padding: 4px 6px; text-align: right;">${_fmtINR(amountPaid)}</td>
+//           </tr>
+//           <tr style="border-top: 1px solid #111; font-weight: 700; font-size: 11px;">
+//             <td colspan="4" style="padding: 6px; text-align: right;">Balance Due</td>
+//             <td style="padding: 6px; text-align: right;">${_fmtINR(balanceDue)}</td>
+//           </tr>
+//           `
+//               : ""
+//           }
+//         </tbody>
+//       </table>
+
+//       <!-- SUMMARY & BOTTLE BALANCE -->
+//       <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; margin-bottom: 14px; border-bottom: 1px dashed #ccc; padding-bottom: 8px;">
+//         <div><b>Total Items:</b> ${order.items ? order.items.length : 0} (${totalQty} Qty)</div>
+//         <div style="background: ${colors.goldSoft || "#fff8e1"}; border: 1px solid #ffe082; padding: 4px 8px; border-radius: 4px; font-weight: 700; color: ${colors.primaryDark || "#000"};">
+//           🍼 Bottles Due: ${totalRemainingBottles}
+//         </div>
+//       </div>
+
+//       <!-- BANK DETAILS & UPI -->
+//       <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
+//         <div style="width: 50%; font-size: 9px; line-height: 1.4;">
+//           <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Bank Details:</div>
+//           <div><b>Bank:</b> ${order.bankName || "Indian Bank"}</div>
+//           <div><b>Holder:</b> ${order.accountHolder || "Deena Dhayalan R"}</div>
+//           <div><b>A/C:</b> ${order.accountNumber || "7084125477"}</div>
+//           <div><b>IFSC:</b> ${order.ifscCode || "IDIB000M206"}</div>
+//         </div>
+//         <div style="width: 45%; text-align: right;">
+//           <div style="background: #fff8e1; border: 1px solid #ffe082; padding: 6px; border-radius: 4px; text-align: center;">
+//             <div style="font-size: 8px; text-transform: uppercase; color: #555;">Payable</div>
+//             <div style="font-size: 14px; font-weight: 800; color: #000;">${_fmtINR(balanceDue > 0 ? balanceDue : totalAmount)}</div>
+//             ${
+//               balanceDue > 0 && upiId
+//                 ? `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ccc;">
+//                     <img src="${upiQrUrl}" style="width: 70px; height: 70px;" alt="UPI QR" />
+//                    </div>
+//                    <div style="font-size: 7px; color: #888; margin-top: 2px;">Scan to Pay</div>`
+//                 : ""
+//             }
+//           </div>
+//         </div>
+//       </div>
+
+//       <!-- FOOTER -->
+//       <div style="text-align: center; border-top: 1px solid #111; padding-top: 8px; margin-top: 10px;">
+//         <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+//           ${sigImg ? `<img src="${sigImg}" style="height: 35px; max-width: 100px; object-fit: contain;" onError="this.style.display='none'" alt="Signature" />` : ""}
+//           <div style="font-size: 8px; color: #555;">For <b>${bizName}</b></div>
+//           <div style="border-top: 1px solid #888; padding-top: 2px; font-weight: 600; font-size: 8px; width: 120px;">Authorized Signatory</div>
+//         </div>
+//       </div>
+
+//     </div>
+//   `;
+// }
+
+// async function generateBill(order, allOrders = [], customers = []) {
+//   let el = null;
+//   try {
+//     await ensureHtml2Pdf();
+
+//     // Create an off-screen element off the viewport but renderable
+//     el = document.createElement("div");
+//     el.style.position = "absolute";
+//     el.style.left = "-9999px";
+//     el.style.top = "0";
+//     el.style.width = "420px";
+//     el.innerHTML = buildBillMarkup(order, allOrders, customers);
+//     document.body.appendChild(el);
+
+//     const filename = `Invoice_${order.invoiceNo || order.id || Date.now()}.pdf`;
+
+//     const opt = {
+//       margin: 4,
+//       filename: filename,
+//       image: { type: "jpeg", quality: 0.98 },
+//       html2canvas: { scale: 2, useCORS: true, logging: false },
+//       jsPDF: { unit: "mm", format: "a5", orientation: "portrait" },
+//     };
+
+//     // 1. Generate Data URI String
+//     const pdfDataUri = await window.html2pdf().set(opt).from(el).outputPdf("datauristring");
+//     const base64Data = pdfDataUri.split(",")[1];
+
+//     // 2. Save PDF file locally via Capacitor Filesystem
+//     const fileResult = await Filesystem.writeFile({
+//       path: filename,
+//       data: base64Data,
+//       directory: Directory.Cache,
+//     });
+
+//     // 3. Share Native PDF via Capacitor Share
+//     await Share.share({
+//       title: "Tax Invoice",
+//       text: `Invoice #${order.invoiceNo || order.id} from ${typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : 'A2D\'Elites'}`,
+//       url: fileResult.uri,
+//       dialogTitle: "Share Invoice PDF",
+//     });
+
+//   } catch (err) {
+//     console.error("PDF Generation Error:", err);
+//     alert("Failed to generate PDF invoice. Falling back to print mode.");
+//     openPrintable(order, allOrders, customers);
+//   } finally {
+//     if (el && el.parentNode) {
+//       document.body.removeChild(el);
+//     }
+//   }
+// }
+
+// function openPrintable(order, allOrders = [], customers = []) {
+//   const billMarkup = buildBillMarkup(order, allOrders, customers);
+//   const printWindow = window.open("", "_blank");
+
+//   if (printWindow) {
+//     printWindow.document.write(`
+//       <!DOCTYPE html>
+//       <html>
+//         <head>
+//           <title>Invoice</title>
+//           <meta name="viewport" content="width=device-width, initial-scale=1.0">
+//           <style>
+//             body { margin: 0; padding: 10px; background: #fff; }
+//             @media print {
+//               body { padding: 0; }
+//             }
+//           </style>
+//         </head>
+//         <body>
+//           ${billMarkup}
+//         </body>
+//       </html>
+//     `);
+//     printWindow.document.close();
+//     printWindow.onload = () => {
+//       printWindow.focus();
+//       printWindow.print();
+//     };
+//   }
+// }
+
+
+  /* ============================== PDF / BILL GENERATION ============================== */
+  async function ensureHtml2Pdf() {
+    if (window.html2pdf) return;
+    await new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
+      s.onload = resolve; s.onerror = reject; document.head.appendChild(s);
+    });
+  }
+
+  async function generateBill(order) {
+    try {
+      await ensureHtml2Pdf();
+    } catch (e) {
+      openPrintable(order);
+      return;
+    }
+
+    const el = document.createElement("div");
+    el.style.width = "380px";
+    el.style.padding = "0";
+    el.style.fontFamily = "'DM Sans', sans-serif";
+    el.style.background = C.bg;
+    el.style.color = C.ink;
+    el.innerHTML = `
+      <div style="background:${C.primary}; color:#fff; padding:20px 18px 16px; border-radius:14px 14px 0 0;">
+        <div style="display:flex; align-items:center; justify-content:space-between;">
           <div>
-            <h1 style="font-size: 18px; font-weight: 800; margin: 0; text-transform: uppercase;">${BUSINESS_NAME}</h1>
-            <div style="font-size: 9px; color: #555; text-transform: uppercase;">${BUSINESS_TAGLINE || ""}</div>
-            <div style="font-size: 9px; color: #444; margin-top: 4px; line-height: 1.3;">
-              ${bizAddress ? `<div>${bizAddress}</div>` : ""}
-              ${bizPhone || bizEmail ? `<div>Ph: ${bizPhone} ${bizEmail ? `| ${bizEmail}` : ""}</div>` : ""}
-            </div>
+            <div style="font-family:'Fraunces',serif; font-size:22px; font-weight:700;">${BUSINESS_NAME}</div>
+            <div style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; opacity:.75; text-transform:uppercase;">${BUSINESS_TAGLINE}</div>
           </div>
-        </div>
-        <div style="text-align: right;">
-          <h2 style="font-size: 20px; margin: 0; font-weight: 900; letter-spacing: 1px;">INVOICE</h2>
-          <span style="display: inline-block; background: #eee; border: 1px solid #ccc; font-size: 8px; font-weight: 700; padding: 2px 6px; margin-top: 4px;">
-            ${order.copyType || "ORIGINAL FOR RECIPIENT"}
-          </span>
+          <div style="background:${C.gold}; color:#fff; padding:7px 10px; border-radius:9px; font-size:11px; font-weight:700; letter-spacing:1px;">BILL</div>
         </div>
       </div>
-
-      <!-- METADATA GRID -->
-      <div style="display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 10px;">
-        <div style="width: 55%;">
-          <div style="font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 2px;">Billing Address:</div>
-          <div style="font-weight: 700; font-size: 12px;">${order.customerName || "—"}</div>
-          <div style="color: #333; line-height: 1.4;">${deliveryAddress}</div>
-          <div style="color: #333; margin-top: 2px;">Ph: ${contactPhone}</div>
+      <div style="background:${C.paper}; padding:14px 18px 18px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
+          <div><div style="font-size:10px; color:${C.inkMute}; text-transform:uppercase; letter-spacing:1px;">Customer</div><div style="font-size:15px; font-weight:700; margin-top:3px;">${order.customerName || "—"}</div></div>
+          <div style="text-align:right;"><div style="font-size:10px; color:${C.inkMute}; text-transform:uppercase; letter-spacing:1px;">Date</div><div style="font-size:12px; font-weight:600; margin-top:3px;">${fmtDate(order.orderDate || todayStr())}</div></div>
         </div>
-        <div style="width: 40%; text-align: right; line-height: 1.5;">
-          <div><b>Invoice #:</b> ${invoiceNo}</div>
-          <div><b>Invoice Date:</b> ${fmtDate(todayStr())}</div>
-          <div><b>Order Date:</b> ${fmtDate(order.orderDate || todayStr())}</div>
-        </div>
-      </div>
-
-      <!-- LINE ITEMS TABLE -->
-      <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px;">
-        <thead>
-          <tr style="background: #f4f4f4; border-top: 1px solid #111; border-bottom: 1px solid #111; text-align: left;">
-            <th style="padding: 6px; width: 5%;">#</th>
-            <th style="padding: 6px;">Item</th>
-            <th style="padding: 6px; text-align: right;">Rate / Item</th>
-            <th style="padding: 6px; text-align: center;">Qty</th>
-            <th style="padding: 6px; text-align: right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${(order.items || [])
-            .map(
-              (it, idx) => `
-            <tr style="border-bottom: 1px solid #eee;">
-              <td style="padding: 6px;">${idx + 1}</td>
-              <td style="padding: 6px; font-weight: 600;">${it.productName}</td>
-              <td style="padding: 6px; text-align: right;">${fmtINR(it.price || 0)}</td>
-              <td style="padding: 6px; text-align: center;">${it.qty} ${it.unit || "PCS"}</td>
-              <td style="padding: 6px; text-align: right; font-weight: 600;">${fmtINR((it.qty || 0) * (it.price || 0))}</td>
-            </tr>
-          `,
-            )
-            .join("")}
-          <tr style="border-top: 1px solid #111; font-weight: 600;">
-            <td colspan="4" style="padding: 6px; text-align: right;">Subtotal</td>
-            <td style="padding: 6px; text-align: right;">${fmtINR(totalAmount)}</td>
-          </tr>
-          ${
-            amountPaid > 0
-              ? `
-          <tr style="color: #2e7d32;">
-            <td colspan="4" style="padding: 4px 6px; text-align: right;">Amount Paid</td>
-            <td style="padding: 4px 6px; text-align: right;">${fmtINR(amountPaid)}</td>
-          </tr>
-          <tr style="border-top: 1px solid #111; font-weight: 700; font-size: 11px;">
-            <td colspan="4" style="padding: 6px; text-align: right;">Balance Due</td>
-            <td style="padding: 6px; text-align: right;">${fmtINR(balanceDue)}</td>
-          </tr>
-          `
-              : ""
-          }
-        </tbody>
-      </table>
-
-      <!-- SUMMARY & BOTTLE BALANCE -->
-      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; margin-bottom: 14px; border-bottom: 1px dashed #ccc; padding-bottom: 8px;">
-        <div><b>Total Items/Qty:</b> ${order.items ? order.items.length : 0}/${totalQty}</div>
-        <div style="background: ${C.goldSoft || "#fff8e1"}; border: 1px solid #ffe082; padding: 4px 8px; border-radius: 4px; font-weight: 700; color: ${C.primaryDark || "#000"};">
-          🍼 Empty Bottles to Return: ${totalRemainingBottles}
-        </div>
-      </div>
-
-      <!-- BANK DETAILS & SIGN-OFF -->
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
-        <div style="width: 55%; font-size: 9px; line-height: 1.4;">
-          <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Bank Details:</div>
-          <div><b>Bank:</b> ${order.bankName || "Indian Bank"}</div>
-          <div><b>Account Holder:</b> ${order.accountHolder || "Deena Dhayalan R"}</div>
-          <div><b>Account #:</b> ${order.accountNumber || "7084125477"}</div>
-          <div><b>IFSC Code:</b> ${order.ifscCode || "IDIB000M206"}</div>
-          <div><b>Branch:</b> ${order.bankBranch || "MKB Nagar"}</div>
-        </div>
-        <div style="width: 40%; text-align: right;">
-          <div style="background: #fff8e1; border: 1px solid #ffe082; padding: 8px; border-radius: 4px; margin-bottom: 12px; text-align: center;">
-            <div style="font-size: 8px; text-transform: uppercase; color: #555;">Amount Payable</div>
-            <div style="font-size: 15px; font-weight: 800; color: #000;">${fmtINR(balanceDue > 0 ? balanceDue : totalAmount)}</div>
-                          ${(balanceDue > 0 && UPI_ID) ? `<div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ccc;"><img src={'https://api.qrserver.com/v1/create-qr-code/?size=80x80&data=upi://pay?pa=' + UPI_ID + '&pn=' + encodeURIComponent(UPI_PAYEE_NAME || BUSINESS_NAME) + '&am=' + balanceDue + '&cu=INR'} style="width: 80px; height: 80px;" alt="UPI QR" /></div><div style="font-size: 7px; color: #888; margin-top: 4px;">Scan to Pay via UPI</div>` : ''}
-                        </div>
-          <div style="font-size: 9px;">
-            <div>For <b>${BUSINESS_NAME}</b></div>
-            <div style="height: 30px;"></div>
-            <div style="border-top: 1px solid #888; display: inline-block; padding-top: 2px; font-weight: 600;">Authorized Signatory</div>
+        <div style="background:${C.primarySoft}; color:${C.primaryDark}; padding:7px 9px; border-radius:7px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Order Summary</div>
+        ${order.items.map(it => `
+          <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:10px 2px; border-bottom:1px solid ${C.paperLine};">
+            <div style="max-width:65%;"><span style="color:${C.gold}; font-weight:700;">${it.qty} ×</span> ${it.productName}<div style="font-size:10px; color:${C.inkMute}; margin-top:2px;">${it.unit || "Unit"}</div></div>
+            <div style="text-align:right; font-weight:700; color:${C.primaryDark};">${fmtINR((it.qty||0)*(it.price||0))}</div>
           </div>
-        </div>
+        `).join("")}
+        <div style="display:flex; justify-content:space-between; align-items:center; background:${C.goldSoft}; color:${C.primaryDark}; padding:12px 10px; margin-top:14px; border-radius:9px; font-weight:700; font-size:15px;"><div>Total</div><div>${fmtINR(order.total|| order.items.reduce((s,it)=>s+(Number(it.qty)||0)*(Number(it.price)||0),0))}</div></div>
+        <div style="display:flex; gap:6px; margin-top:12px; font-size:10px; font-weight:700;"><span style="background:${C.greenSoft}; color:${C.green}; padding:5px 8px; border-radius:12px;">${order.orderStatus || 'Pending'}</span><span style="background:${C.brickSoft}; color:${C.brick}; padding:5px 8px; border-radius:12px;">${order.paymentStatus || 'Pending'}</span></div>
+        <div style="text-align:center; font-size:10px; color:${C.inkMute}; margin-top:16px;">Thank you for your purchase!</div>
       </div>
+    `;
 
-      <!-- FOOTER -->
-      <div style="text-align: center; border-top: 1px solid #111; padding-top: 6px; font-size: 8px; color: #666;">
-          <div style="font-size: 9px;">
-            <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
-              <img src={signatureImg} style="height: 50px; max-width: 120px; object-fit: contain; opacity: 0.9;" onError="this.style.display='none'" alt="Signature" />
-              <div style="font-size: 8px; color: #555;">For <b>${BUSINESS_NAME}</b></div>
-              <div style="border-top: 1px solid #888; padding-top: 2px; font-weight: 600; font-size: 8px;">Authorized Signatory</div>
-            </div>
-          </div>
-      </div>
-
-    </div>
-  `;
-}
-
-async function generateBill(order, allOrders = [], customers = []) {
-  try {
-    await ensureHtml2Pdf();
-  } catch (e) {
-    openPrintable(order, allOrders, customers);
-    return;
+    document.body.appendChild(el);
+    try {
+      const filename = `bill-${order.id || 'invoice'}.pdf`;
+      const opt = { margin: 8, filename, image: { type: 'jpeg', quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { unit: 'mm', format: 'a5', orientation: 'portrait' } };
+      const pdfDataUri = await window.html2pdf().set(opt).from(el).outputPdf('datauristring');
+      const base64 = pdfDataUri.split(',')[1];
+      const file = await Filesystem.writeFile({
+        path: filename,
+        data: base64,
+        directory: Directory.Cache,
+        recursive: true,
+      });
+      document.body.removeChild(el);
+      await Share.share({
+        title: 'Dairy bill',
+        text: `Bill for ${order.customerName || 'customer'}`,
+        url: file.uri,
+        dialogTitle: 'Share or print bill',
+      });
+    } catch (e) {
+      if (el.parentNode) document.body.removeChild(el);
+      openPrintable(order);
+    }
   }
 
-  const el = document.createElement("div");
-  el.style.width = "450px";
-  el.style.padding = "10px";
-  el.style.background = C.bg || "#fff";
-  el.innerHTML = buildBillMarkup(order, allOrders, customers);
-  document.body.appendChild(el);
+  function openPrintable(order) {
+    const billMarkup = `
+      <div style="font-family: 'DM Sans', sans-serif; padding:18px; color:${C.ink}">
+        <h2 style="margin:0">${BUSINESS_NAME}</h2>
+        <div style="color:${C.inkMute}">${BUSINESS_TAGLINE}</div>
+        <hr />
+        <div>Customer: <b>${order.customerName || ''}</b></div>
+        ${order.items.map((it) => `<div style="display:flex; justify-content:space-between; margin-top:8px"><div>${it.qty} × ${it.productName}</div><div>${fmtINR((it.qty || 0) * (it.price || 0))}</div></div>`).join('')}
+        <hr />
+        <div style="font-weight:700; display:flex; justify-content:space-between"><div>Total</div><div>${fmtINR(order.total || 0)}</div></div>
+      </div>`;
 
-  try {
-    const filename = `invoice-${order.invoiceNo || order.id || "invoice"}.pdf`;
-    const opt = {
-      margin: 5,
-      filename,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: "mm", format: "a5", orientation: "portrait" },
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(`<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`);
+      w.document.close();
+      w.onload = () => { w.focus(); w.print(); };
+      return;
+    }
+
+    // Android WebView may block window.open, so print through a hidden iframe.
+    const frame = document.createElement('iframe');
+    frame.style.position = 'fixed';
+    frame.style.width = '1px';
+    frame.style.height = '1px';
+    frame.style.right = '0';
+    frame.style.bottom = '0';
+    frame.style.border = '0';
+    document.body.appendChild(frame);
+    const frameDocument = frame.contentDocument || frame.contentWindow.document;
+    frameDocument.open();
+    frameDocument.write(`<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`);
+    frameDocument.close();
+    frame.onload = () => {
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      setTimeout(() => frame.remove(), 1000);
     };
-
-    const pdfDataUri = await window
-      .html2pdf()
-      .set(opt)
-      .from(el)
-      .outputPdf("datauristring");
-
-    const base64 = pdfDataUri.split(",")[1];
-    const file = await Filesystem.writeFile({
-      path: filename,
-      data: base64,
-      directory: Directory.Cache,
-      recursive: true,
-    });
-
-    document.body.removeChild(el);
-
-    await Share.share({
-      title: "Dairy Invoice",
-      text: `Invoice for ${order.customerName || "customer"}`,
-      url: file.uri,
-      dialogTitle: "Share or print invoice",
-    });
-  } catch (e) {
-    if (el.parentNode) document.body.removeChild(el);
-    openPrintable(order, allOrders, customers);
-  }
-}
-
-function openPrintable(order, allOrders = [], customers = []) {
-  const billMarkup = buildBillMarkup(order, allOrders, customers);
-  const w = window.open("", "_blank");
-
-  if (w) {
-    w.document.write(
-      `<html><head><title>Invoice</title></head><body>${billMarkup}</body></html>`,
-    );
-    w.document.close();
-    w.onload = () => {
-      w.focus();
-      w.print();
-    };
-    return;
   }
 
-  // Android WebView fallback using a hidden iframe
-  const frame = document.createElement("iframe");
-  frame.style.position = "fixed";
-  frame.style.width = "1px";
-  frame.style.height = "1px";
-  frame.style.right = "0";
-  frame.style.bottom = "0";
-  frame.style.border = "0";
-  document.body.appendChild(frame);
 
-  const frameDocument = frame.contentDocument || frame.contentWindow.document;
-  frameDocument.open();
-  frameDocument.write(
-    `<html><head><title>Invoice</title></head><body>${billMarkup}</body></html>`,
-  );
-  frameDocument.close();
 
-  frame.onload = () => {
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-    setTimeout(() => frame.remove(), 1000);
-  };
-}
 /* ============================== ROOT APP ============================== */
 export default function App() {
   const [data, setData, isLoaded] = useCapacitorStorage(
@@ -715,6 +836,53 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* Temporary Bill Generation Test Trigger */}
+<div style={{ position: "fixed", bottom: 95, right: 16, zIndex: 1000 }}>
+  <button
+    onClick={() => {
+      const sampleOrder = {
+        id: "ORD-TEST-01",
+        invoiceNo: "INV-999999",
+        customerName: "Ramesh Kumar",
+        phone: "9876543210",
+        customerAddress: "45, Anna Nagar, Chennai",
+        orderDate: new Date().toISOString().split("T")[0],
+        items: [
+          { productName: "Cow Milk (500ml)", price: 30, qty: 2, unit: "PCS", category: "Milk" },
+          { productName: "Curd (200g)", price: 20, qty: 1, unit: "PCS", category: "Dairy" }
+        ],
+        amountPaid: 40,
+        bottlesReturned: 1,
+        bankName: "Indian Bank",
+        accountHolder: "Deena Dhayalan R",
+        accountNumber: "7084125477",
+        ifscCode: "IDIB000M206",
+        bankBranch: "MKB Nagar"
+      };
+
+      // Calls your print/preview function with empty array fallbacks for orders and customers
+      if (typeof openPrintable === "function") {
+        openPrintable(sampleOrder, data?.orders || [], data?.customers || []);
+      } else {
+        console.error("openPrintable function is not defined in scope.");
+      }
+    }}
+    style={{
+      background: "#2e7d32",
+      color: "#fff",
+      border: "none",
+      padding: "10px 16px",
+      borderRadius: "20px",
+      fontWeight: "700",
+      fontSize: "12px",
+      boxShadow: "0 4px 10px rgba(0,0,0,0.2)",
+      cursor: "pointer"
+    }}
+  >
+    🖨️ Test Bill PDF
+  </button>
+</div>
 
       <SharedBottomNav tab={tab} setTab={setTab} badge={pendingDeliveries} />
 
