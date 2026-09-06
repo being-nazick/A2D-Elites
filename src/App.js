@@ -1,6 +1,8 @@
 import logoIcon from "./assets/logo.png";
 import signatureImg from "./assets/signature.png";
 import React, { useState, useEffect, useMemo } from "react";
+import html2pdf from "html2pdf.js";
+import qrImg from "./assets/payment-qr.png";
 import {
   Plus,
   Package,
@@ -166,441 +168,402 @@ function csvDownload(filename, rows) {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
-
-// /* ============================== PDF / BILL GENERATION ============================== */
-
-// async function ensureHtml2Pdf() {
-//   if (window.html2pdf) return;
-//   await new Promise((resolve, reject) => {
-//     const s = document.createElement("script");
-//     s.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
-//     s.onload = resolve;
-//     s.onerror = reject;
-//     document.head.appendChild(s);
-//   });
-// }
-
-// function buildBillMarkup(order, allOrders = [], customers = []) {
-//   const _fmtINR = typeof fmtINR === "function" ? fmtINR : (v) => `₹${Number(v || 0).toFixed(2)}`;
-//   const _fmtDate = typeof fmtDate === "function" ? fmtDate : (d) => d || new Date().toISOString().split("T")[0];
-//   const _todayStr = typeof todayStr === "function" ? todayStr() : new Date().toISOString().split("T")[0];
-
-//   const bizName = typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : "A2D'Elites";
-//   const bizTagline = typeof BUSINESS_TAGLINE !== "undefined" ? BUSINESS_TAGLINE : "SINCE 2025";
-//   const bizAddress = typeof BUSINESS_ADDRESS !== "undefined" ? BUSINESS_ADDRESS : "";
-//   const bizPhone = typeof BUSINESS_PHONE !== "undefined" ? BUSINESS_PHONE : "";
-//   const bizEmail = typeof BUSINESS_EMAIL !== "undefined" ? BUSINESS_EMAIL : "";
-//   const upiId = typeof UPI_ID !== "undefined" ? UPI_ID : "";
-//   const upiPayee = typeof UPI_PAYEE_NAME !== "undefined" ? UPI_PAYEE_NAME : bizName;
-//   const colors = typeof C !== "undefined" ? C : {};
-//   const sigImg = typeof signatureImg !== "undefined" ? signatureImg : "";
-
-//   const customer = customers?.find((c) => c.id === order.customerId) || null;
-//   const deliveryAddress = customer?.address || order.customerAddress || order.address || "—";
-//   const contactPhone = customer?.phone || order.phone || "—";
-
-//   const totalAmount =
-//     order.total ||
-//     (order.items || []).reduce(
-//       (sum, it) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
-//       0,
-//     );
-//   const amountPaid = Number(order.amountPaid) || 0;
-//   const balanceDue = Math.max(0, totalAmount - amountPaid);
-//   const totalQty = (order.items || []).reduce(
-//     (sum, item) => sum + (Number(item.qty) || 0),
-//     0,
-//   );
-
-//   const pastBottles = (allOrders || [])
-//     .filter(
-//       (o) =>
-//         o.customerId === order.customerId &&
-//         o.orderStatus !== "Cancelled" &&
-//         o.id !== order.id,
-//     )
-//     .reduce((sum, o) => {
-//       const delivered = (o.items || [])
-//         .filter((it) => it.category === "Milk")
-//         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
-//       const returned = Number(o.bottlesReturned) || 0;
-//       return sum + delivered - returned;
-//     }, 0);
-
-//   const currentDelivered = (order.items || [])
-//     .filter((it) => it.category === "Milk")
-//     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
-//   const currentReturned = Number(order.bottlesReturned) || 0;
-//   const totalRemainingBottles = Math.max(
-//     0,
-//     pastBottles + (currentDelivered - currentReturned),
-//   );
-
-//   const invoiceNo =
-//     order.invoiceNo ||
-//     `INV-${(order.id || "XXXXX").toString().toUpperCase().slice(-6)}`;
-
-//   const upiQrUrl = upiId
-//     ? `https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=${encodeURIComponent(`upi://pay?pa=${upiId}&pn=${upiPayee}&am=${balanceDue}&cu=INR`)}`
-//     : "";
-
-//   return `
-//     <div style="font-family: sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; width: 400px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${colors.paperLine || "#ddd"}; border-radius: 8px;">
-
-//       <!-- HEADER SECTION -->
-//       <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
-//         <div style="display: flex; gap: 12px; align-items: center;">
-//           ${order.qrCodeUrl ? `<img src="${order.qrCodeUrl}" style="width: 50px; height: 50px;" alt="QR" />` : ""}
-//           <div>
-//             <h1 style="font-size: 16px; font-weight: 800; margin: 0; text-transform: uppercase;">${bizName}</h1>
-//             <div style="font-size: 9px; color: #555; text-transform: uppercase;">${bizTagline}</div>
-//             <div style="font-size: 9px; color: #444; margin-top: 4px; line-height: 1.3;">
-//               ${bizAddress ? `<div>${bizAddress}</div>` : ""}
-//               ${bizPhone || bizEmail ? `<div>Ph: ${bizPhone} ${bizEmail ? `| ${bizEmail}` : ""}</div>` : ""}
-//             </div>
-//           </div>
-//         </div>
-//         <div style="text-align: right;">
-//           <h2 style="font-size: 18px; margin: 0; font-weight: 900; letter-spacing: 1px;">INVOICE</h2>
-//           <span style="display: inline-block; background: #eee; border: 1px solid #ccc; font-size: 8px; font-weight: 700; padding: 2px 6px; margin-top: 4px;">
-//             ${order.copyType || "ORIGINAL"}
-//           </span>
-//         </div>
-//       </div>
-
-//       <!-- METADATA GRID -->
-//       <div style="display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 10px;">
-//         <div style="width: 55%;">
-//           <div style="font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 2px;">Billing Address:</div>
-//           <div style="font-weight: 700; font-size: 11px;">${order.customerName || customer?.name || "—"}</div>
-//           <div style="color: #333; line-height: 1.3;">${deliveryAddress}</div>
-//           <div style="color: #333; margin-top: 2px;">Ph: ${contactPhone}</div>
-//         </div>
-//         <div style="width: 40%; text-align: right; line-height: 1.4;">
-//           <div><b>Invoice #:</b> ${invoiceNo}</div>
-//           <div><b>Invoice Date:</b> ${_fmtDate(_todayStr)}</div>
-//           <div><b>Order Date:</b> ${_fmtDate(order.orderDate || _todayStr)}</div>
-//         </div>
-//       </div>
-
-//       <!-- LINE ITEMS TABLE -->
-//       <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px;">
-//         <thead>
-//           <tr style="background: #f4f4f4; border-top: 1px solid #111; border-bottom: 1px solid #111; text-align: left;">
-//             <th style="padding: 6px; width: 5%;">#</th>
-//             <th style="padding: 6px;">Item</th>
-//             <th style="padding: 6px; text-align: right;">Rate</th>
-//             <th style="padding: 6px; text-align: center;">Qty</th>
-//             <th style="padding: 6px; text-align: right;">Amount</th>
-//           </tr>
-//         </thead>
-//         <tbody>
-//           ${(order.items || [])
-//             .map(
-//               (it, idx) => `
-//             <tr style="border-bottom: 1px solid #eee;">
-//               <td style="padding: 6px;">${idx + 1}</td>
-//               <td style="padding: 6px; font-weight: 600;">${it.productName || it.name || "Item"}</td>
-//               <td style="padding: 6px; text-align: right;">${_fmtINR(it.price || 0)}</td>
-//               <td style="padding: 6px; text-align: center;">${it.qty || 0} ${it.unit || "PCS"}</td>
-//               <td style="padding: 6px; text-align: right; font-weight: 600;">${_fmtINR((it.qty || 0) * (it.price || 0))}</td>
-//             </tr>
-//           `,
-//             )
-//             .join("")}
-//           <tr style="border-top: 1px solid #111; font-weight: 600;">
-//             <td colspan="4" style="padding: 6px; text-align: right;">Subtotal</td>
-//             <td style="padding: 6px; text-align: right;">${_fmtINR(totalAmount)}</td>
-//           </tr>
-//           ${
-//             amountPaid > 0
-//               ? `
-//           <tr style="color: #2e7d32;">
-//             <td colspan="4" style="padding: 4px 6px; text-align: right;">Amount Paid</td>
-//             <td style="padding: 4px 6px; text-align: right;">${_fmtINR(amountPaid)}</td>
-//           </tr>
-//           <tr style="border-top: 1px solid #111; font-weight: 700; font-size: 11px;">
-//             <td colspan="4" style="padding: 6px; text-align: right;">Balance Due</td>
-//             <td style="padding: 6px; text-align: right;">${_fmtINR(balanceDue)}</td>
-//           </tr>
-//           `
-//               : ""
-//           }
-//         </tbody>
-//       </table>
-
-//       <!-- SUMMARY & BOTTLE BALANCE -->
-//       <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; margin-bottom: 14px; border-bottom: 1px dashed #ccc; padding-bottom: 8px;">
-//         <div><b>Total Items:</b> ${order.items ? order.items.length : 0} (${totalQty} Qty)</div>
-//         <div style="background: ${colors.goldSoft || "#fff8e1"}; border: 1px solid #ffe082; padding: 4px 8px; border-radius: 4px; font-weight: 700; color: ${colors.primaryDark || "#000"};">
-//           🍼 Bottles Due: ${totalRemainingBottles}
-//         </div>
-//       </div>
-
-//       <!-- BANK DETAILS & UPI -->
-//       <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px;">
-//         <div style="width: 50%; font-size: 9px; line-height: 1.4;">
-//           <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Bank Details:</div>
-//           <div><b>Bank:</b> ${order.bankName || "Indian Bank"}</div>
-//           <div><b>Holder:</b> ${order.accountHolder || "Deena Dhayalan R"}</div>
-//           <div><b>A/C:</b> ${order.accountNumber || "7084125477"}</div>
-//           <div><b>IFSC:</b> ${order.ifscCode || "IDIB000M206"}</div>
-//         </div>
-//         <div style="width: 45%; text-align: right;">
-//           <div style="background: #fff8e1; border: 1px solid #ffe082; padding: 6px; border-radius: 4px; text-align: center;">
-//             <div style="font-size: 8px; text-transform: uppercase; color: #555;">Payable</div>
-//             <div style="font-size: 14px; font-weight: 800; color: #000;">${_fmtINR(balanceDue > 0 ? balanceDue : totalAmount)}</div>
-//             ${
-//               balanceDue > 0 && upiId
-//                 ? `<div style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ccc;">
-//                     <img src="${upiQrUrl}" style="width: 70px; height: 70px;" alt="UPI QR" />
-//                    </div>
-//                    <div style="font-size: 7px; color: #888; margin-top: 2px;">Scan to Pay</div>`
-//                 : ""
-//             }
-//           </div>
-//         </div>
-//       </div>
-
-//       <!-- FOOTER -->
-//       <div style="text-align: center; border-top: 1px solid #111; padding-top: 8px; margin-top: 10px;">
-//         <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-//           ${sigImg ? `<img src="${sigImg}" style="height: 35px; max-width: 100px; object-fit: contain;" onError="this.style.display='none'" alt="Signature" />` : ""}
-//           <div style="font-size: 8px; color: #555;">For <b>${bizName}</b></div>
-//           <div style="border-top: 1px solid #888; padding-top: 2px; font-weight: 600; font-size: 8px; width: 120px;">Authorized Signatory</div>
-//         </div>
-//       </div>
-
-//     </div>
-//   `;
-// }
-
-// async function generateBill(order, allOrders = [], customers = []) {
-//   let el = null;
-//   try {
-//     await ensureHtml2Pdf();
-
-//     // Create an off-screen element off the viewport but renderable
-//     el = document.createElement("div");
-//     el.style.position = "absolute";
-//     el.style.left = "-9999px";
-//     el.style.top = "0";
-//     el.style.width = "420px";
-//     el.innerHTML = buildBillMarkup(order, allOrders, customers);
-//     document.body.appendChild(el);
-
-//     const filename = `Invoice_${order.invoiceNo || order.id || Date.now()}.pdf`;
-
-//     const opt = {
-//       margin: 4,
-//       filename: filename,
-//       image: { type: "jpeg", quality: 0.98 },
-//       html2canvas: { scale: 2, useCORS: true, logging: false },
-//       jsPDF: { unit: "mm", format: "a5", orientation: "portrait" },
-//     };
-
-//     // 1. Generate Data URI String
-//     const pdfDataUri = await window.html2pdf().set(opt).from(el).outputPdf("datauristring");
-//     const base64Data = pdfDataUri.split(",")[1];
-
-//     // 2. Save PDF file locally via Capacitor Filesystem
-//     const fileResult = await Filesystem.writeFile({
-//       path: filename,
-//       data: base64Data,
-//       directory: Directory.Cache,
-//     });
-
-//     // 3. Share Native PDF via Capacitor Share
-//     await Share.share({
-//       title: "Tax Invoice",
-//       text: `Invoice #${order.invoiceNo || order.id} from ${typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : 'A2D\'Elites'}`,
-//       url: fileResult.uri,
-//       dialogTitle: "Share Invoice PDF",
-//     });
-
-//   } catch (err) {
-//     console.error("PDF Generation Error:", err);
-//     alert("Failed to generate PDF invoice. Falling back to print mode.");
-//     openPrintable(order, allOrders, customers);
-//   } finally {
-//     if (el && el.parentNode) {
-//       document.body.removeChild(el);
-//     }
-//   }
-// }
-
-// function openPrintable(order, allOrders = [], customers = []) {
-//   const billMarkup = buildBillMarkup(order, allOrders, customers);
-//   const printWindow = window.open("", "_blank");
-
-//   if (printWindow) {
-//     printWindow.document.write(`
-//       <!DOCTYPE html>
-//       <html>
-//         <head>
-//           <title>Invoice</title>
-//           <meta name="viewport" content="width=device-width, initial-scale=1.0">
-//           <style>
-//             body { margin: 0; padding: 10px; background: #fff; }
-//             @media print {
-//               body { padding: 0; }
-//             }
-//           </style>
-//         </head>
-//         <body>
-//           ${billMarkup}
-//         </body>
-//       </html>
-//     `);
-//     printWindow.document.close();
-//     printWindow.onload = () => {
-//       printWindow.focus();
-//       printWindow.print();
-//     };
-//   }
-// }
-
 /* ============================== PDF / BILL GENERATION ============================== */
-async function ensureHtml2Pdf() {
-  if (window.html2pdf) return;
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src =
-      "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.9.3/html2pdf.bundle.min.js";
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
+
+/* -------------------------------------------------------------------------- */
+/* HELPERS                                                                    */
+/* -------------------------------------------------------------------------- */
+
+async function waitForInvoiceImages(container) {
+  const images = Array.from(container.querySelectorAll("img"));
+  if (!images.length) return;
+
+  await Promise.all(
+    images.map((img) => {
+      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+      return new Promise((resolve) => {
+        img.onload = () => resolve();
+        img.onerror = () => resolve();
+      });
+    }),
+  );
 }
 
-async function generateBill(order) {
-  try {
-    await ensureHtml2Pdf();
-  } catch (e) {
-    openPrintable(order);
-    return;
+async function waitForInvoiceRender() {
+  await new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(resolve);
+    });
+  });
+
+  if (document.fonts && document.fonts.ready) {
+    try {
+      await document.fonts.ready;
+    } catch (_) {}
   }
+}
 
-  const el = document.createElement("div");
-  el.style.width = "380px";
-  el.style.padding = "0";
-  el.style.fontFamily = "'DM Sans', sans-serif";
-  el.style.background = C.bg;
-  el.style.color = C.ink;
-  el.innerHTML = `
-      <div style="background:${C.primary}; color:#fff; padding:20px 18px 16px; border-radius:14px 14px 0 0;">
-        <div style="display:flex; align-items:center; justify-content:space-between;">
+/* -------------------------------------------------------------------------- */
+/* OPTION A MARKUP (PRESERVED CONTENT & STRUCTURE)                            */
+/* -------------------------------------------------------------------------- */
+
+function buildBillMarkup(order, allOrders = [], customers = []) {
+  const _fmtINR =
+    typeof fmtINR === "function"
+      ? fmtINR
+      : (v) => `₹${Number(v || 0).toFixed(2)}`;
+  const _fmtDate =
+    typeof fmtDate === "function"
+      ? fmtDate
+      : (d) => d || new Date().toISOString().split("T")[0];
+  const _todayStr =
+    typeof todayStr === "function"
+      ? todayStr()
+      : new Date().toISOString().split("T")[0];
+
+  const bizName =
+    typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : "A2D'Elites";
+  const bizTagline =
+    typeof BUSINESS_TAGLINE !== "undefined" ? BUSINESS_TAGLINE : "SINCE 2025";
+  const bizAddress =
+    typeof BUSINESS_ADDRESS !== "undefined" ? BUSINESS_ADDRESS : "";
+  const bizPhone = typeof BUSINESS_PHONE !== "undefined" ? BUSINESS_PHONE : "";
+  const bizEmail = typeof BUSINESS_EMAIL !== "undefined" ? BUSINESS_EMAIL : "";
+  const colors = typeof C !== "undefined" ? C : {};
+  const sigImg = typeof signatureImg !== "undefined" ? signatureImg : "";
+
+  const customer = customers?.find((c) => c.id === order.customerId) || null;
+  const deliveryAddress =
+    customer?.address || order.customerAddress || order.address || "—";
+  const contactPhone = customer?.phone || order.phone || "—";
+
+  const totalAmount =
+    order.total ||
+    (order.items || []).reduce(
+      (sum, it) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
+      0,
+    );
+  const amountPaid = Number(order.amountPaid) || 0;
+  const balanceDue = Math.max(0, totalAmount - amountPaid);
+  const totalQty = (order.items || []).reduce(
+    (sum, item) => sum + (Number(item.qty) || 0),
+    0,
+  );
+
+  const pastBottles = (allOrders || [])
+    .filter(
+      (o) =>
+        o.customerId === order.customerId &&
+        o.orderStatus !== "Cancelled" &&
+        o.id !== order.id,
+    )
+    .reduce((sum, o) => {
+      const delivered = (o.items || [])
+        .filter((it) => it.category === "Milk")
+        .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+      const returned = Number(o.bottlesReturned) || 0;
+      return sum + delivered - returned;
+    }, 0);
+
+  const currentDelivered = (order.items || [])
+    .filter((it) => it.category === "Milk")
+    .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+  const currentReturned = Number(order.bottlesReturned) || 0;
+  const totalRemainingBottles = Math.max(
+    0,
+    pastBottles + (currentDelivered - currentReturned),
+  );
+
+  const invoiceNo =
+    order.invoiceNo ||
+    `INV-${(order.id || "XXXXX").toString().toUpperCase().slice(-6)}`;
+
+  return `
+    <div style="font-family: sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; width: 703px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${colors.paperLine || "#ddd"}; border-radius: 8px;">
+
+      <!-- HEADER SECTION -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
+        <div style="display: flex; gap: 12px; align-items: center;">
           <div>
-            <div style="font-family:'Fraunces',serif; font-size:22px; font-weight:700;">${BUSINESS_NAME}</div>
-            <div style="font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:1.5px; opacity:.75; text-transform:uppercase;">${BUSINESS_TAGLINE}</div>
+            <h1 style="font-size: 16px; font-weight: 800; margin: 0; text-transform: uppercase;">${bizName}</h1>
+            <div style="font-size: 9px; color: #555; text-transform: uppercase;">${bizTagline}</div>
+            <div style="font-size: 9px; color: #444; margin-top: 4px; line-height: 1.3;">
+              ${bizAddress ? `<div>${bizAddress}</div>` : ""}
+              ${bizPhone || bizEmail ? `<div>Ph: ${bizPhone} ${bizEmail ? `| ${bizEmail}` : ""}</div>` : ""}
+            </div>
           </div>
-          <div style="background:${C.gold}; color:#fff; padding:7px 10px; border-radius:9px; font-size:11px; font-weight:700; letter-spacing:1px;">BILL</div>
+        </div>
+        <div style="text-align: right;">
+          <h2 style="font-size: 18px; margin: 0; font-weight: 900; letter-spacing: 1px;">INVOICE</h2>
+          <span style="display: inline-block; background: #eee; border: 1px solid #ccc; font-size: 8px; font-weight: 700; padding: 2px 6px; margin-top: 4px;">
+            ${order.copyType || "ORIGINAL"}
+          </span>
         </div>
       </div>
-      <div style="background:${C.paper}; padding:14px 18px 18px;">
-        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
-          <div><div style="font-size:10px; color:${C.inkMute}; text-transform:uppercase; letter-spacing:1px;">Customer</div><div style="font-size:15px; font-weight:700; margin-top:3px;">${order.customerName || "—"}</div></div>
-          <div style="text-align:right;"><div style="font-size:10px; color:${C.inkMute}; text-transform:uppercase; letter-spacing:1px;">Date</div><div style="font-size:12px; font-weight:600; margin-top:3px;">${fmtDate(order.orderDate || todayStr())}</div></div>
-        </div>
-        <div style="background:${C.primarySoft}; color:${C.primaryDark}; padding:7px 9px; border-radius:7px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:1px;">Order Summary</div>
-        ${order.items
-          .map(
-            (it) => `
-          <div style="display:flex; justify-content:space-between; align-items:center; font-size:13px; padding:10px 2px; border-bottom:1px solid ${C.paperLine};">
-            <div style="max-width:65%;"><span style="color:${C.gold}; font-weight:700;">${it.qty} ×</span> ${it.productName}<div style="font-size:10px; color:${C.inkMute}; margin-top:2px;">${it.unit || "Unit"}</div></div>
-            <div style="text-align:right; font-weight:700; color:${C.primaryDark};">${fmtINR((it.qty || 0) * (it.price || 0))}</div>
-          </div>
-        `,
-          )
-          .join("")}
-        <div style="display:flex; justify-content:space-between; align-items:center; background:${C.goldSoft}; color:${C.primaryDark}; padding:12px 10px; margin-top:14px; border-radius:9px; font-weight:700; font-size:15px;"><div>Total</div><div>${fmtINR(order.total || order.items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0))}</div></div>
-        <div style="display:flex; gap:6px; margin-top:12px; font-size:10px; font-weight:700;"><span style="background:${C.greenSoft}; color:${C.green}; padding:5px 8px; border-radius:12px;">${order.orderStatus || "Pending"}</span><span style="background:${C.brickSoft}; color:${C.brick}; padding:5px 8px; border-radius:12px;">${order.paymentStatus || "Pending"}</span></div>
-        <div style="text-align:center; font-size:10px; color:${C.inkMute}; margin-top:16px;">Thank you for your purchase!</div>
-      </div>
-    `;
 
-  document.body.appendChild(el);
+      <!-- METADATA GRID -->
+      <div style="display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 10px;">
+        <div style="width: 55%;">
+          <div style="font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 2px;">Billing Address:</div>
+          <div style="font-weight: 700; font-size: 11px;">${order.customerName || customer?.name || "—"}</div>
+          <div style="color: #333; line-height: 1.3;">${deliveryAddress}</div>
+          <div style="color: #333; margin-top: 2px;">Ph: ${contactPhone}</div>
+        </div>
+        <div style="width: 40%; text-align: right; line-height: 1.4;">
+          <div><b>Invoice #:</b> ${invoiceNo}</div>
+          <div><b>Invoice Date:</b> ${_fmtDate(_todayStr)}</div>
+          <div><b>Order Date:</b> ${_fmtDate(order.orderDate || _todayStr)}</div>
+        </div>
+      </div>
+
+      <!-- LINE ITEMS TABLE -->
+      <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px;">
+        <thead>
+          <tr style="background: #f4f4f4; border-top: 1px solid #111; border-bottom: 1px solid #111; text-align: left;">
+            <th style="padding: 6px; width: 5%;">#</th>
+            <th style="padding: 6px;">Item</th>
+            <th style="padding: 6px; text-align: right;">Rate</th>
+            <th style="padding: 6px; text-align: center;">Qty</th>
+            <th style="padding: 6px; text-align: right;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(order.items || [])
+            .map(
+              (it, idx) => `
+            <tr style="border-bottom: 1px solid #eee;">
+              <td style="padding: 6px;">${idx + 1}</td>
+              <td style="padding: 6px; font-weight: 600;">${it.productName || it.name || "Item"}</td>
+              <td style="padding: 6px; text-align: right;">${_fmtINR(it.price || 0)}</td>
+              <td style="padding: 6px; text-align: center;">${it.qty || 0} ${it.unit || "PCS"}</td>
+              <td style="padding: 6px; text-align: right; font-weight: 600;">${_fmtINR((it.qty || 0) * (it.price || 0))}</td>
+            </tr>
+          `,
+            )
+            .join("")}
+          <tr style="border-top: 1px solid #111; font-weight: 600;">
+            <td colspan="4" style="padding: 6px; text-align: right;">Subtotal</td>
+            <td style="padding: 6px; text-align: right;">${_fmtINR(totalAmount)}</td>
+          </tr>
+          ${
+            amountPaid > 0
+              ? `
+          <tr style="color: #2e7d32;">
+            <td colspan="4" style="padding: 4px 6px; text-align: right;">Amount Paid</td>
+            <td style="padding: 4px 6px; text-align: right;">${_fmtINR(amountPaid)}</td>
+          </tr>
+          <tr style="border-top: 1px solid #111; font-weight: 700; font-size: 11px;">
+            <td colspan="4" style="padding: 6px; text-align: right;">Balance Due</td>
+            <td style="padding: 6px; text-align: right;">${_fmtINR(balanceDue)}</td>
+          </tr>
+          `
+              : ""
+          }
+        </tbody>
+      </table>
+
+      <!-- SUMMARY & BOTTLE BALANCE -->
+      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; margin-bottom: 14px; border-bottom: 1px dashed #ccc; padding-bottom: 8px;">
+        <div><b>Total Items:</b> ${order.items ? order.items.length : 0} (${totalQty} Qty)</div>
+        <div style="background: ${colors.goldSoft || "#fff8e1"}; border: 1px solid #ffe082; padding: 4px 8px; border-radius: 4px; font-weight: 700; color: ${colors.primaryDark || "#000"};">
+          🍼 Bottles Due: ${totalRemainingBottles}
+        </div>
+      </div>
+
+      <!-- BANK DETAILS & QR CODE -->
+<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 12px;">
+  
+  <!-- Left Side: Bank Details -->
+  <div style="width: 50%; font-size: 9px; line-height: 1.4;">
+    <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Bank Details:</div>
+    <div><b>Bank:</b> ${order.bankName || "Indian Bank"}</div>
+    <div><b>Holder:</b> ${order.accountHolder || "Deena Dhayalan R"}</div>
+    <div><b>A/C:</b> ${order.accountNumber || "7084125477"}</div>
+    <div><b>IFSC:</b> ${order.ifscCode || "IDIB000M206"}</div>
+  </div>
+
+  <!-- Right Side: Global QR Code Image & Payable Amount -->
+  <div style="width: 45%; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
+    ${
+      typeof qrImg !== "undefined" && qrImg
+        ? `<div style="text-align: center;">
+            <img src="${qrImg}" style="width: 70px; height: 70px; object-fit: contain; border: 1px solid #ddd; padding: 2px; border-radius: 4px;" alt="Payment QR" />
+            <div style="font-size: 7px; color: #555; margin-top: 2px; font-weight: 600;">Scan to Pay</div>
+          </div>`
+        : ""
+    }
+    <div style="background: #fff8e1; border: 1px solid #ffe082; padding: 8px 12px; border-radius: 4px; text-align: center; min-width: 90px;">
+      <div style="font-size: 8px; text-transform: uppercase; color: #555;">Payable</div>
+      <div style="font-size: 14px; font-weight: 800; color: #000;">${_fmtINR(balanceDue)}</div>
+    </div>
+  </div>
+
+</div>
+      <!-- FOOTER -->
+      <div style="text-align: center; border-top: 1px solid #111; padding-top: 8px; margin-top: 10px;">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+          ${sigImg ? `<img src="${sigImg}" style="height: 35px; max-width: 100px; object-fit: contain;" onError="this.style.display='none'" alt="Signature" />` : ""}
+          <div style="font-size: 8px; color: #555;">For <b>${bizName}</b></div>
+          <div style="border-top: 1px solid #888; padding-top: 2px; font-weight: 600; font-size: 8px; width: 120px;">Authorized Signatory</div>
+        </div>
+      </div>
+
+    </div>
+  `;
+}
+
+/* -------------------------------------------------------------------------- */
+/* GENERATE BILL (OPTION B EXECUTION ENGINE)                                  */
+/* -------------------------------------------------------------------------- */
+
+async function generateBill(order, allOrders = [], customers = []) {
+  let el = null;
+
   try {
-    const filename = `bill-${order.id || "invoice"}.pdf`;
-    const opt = {
-      margin: 8,
+    if (!order || typeof order !== "object") {
+      throw new Error("Invalid order data provided.");
+    }
+
+    // 1. Create container matching Option B DOM rendering strategy
+    el = document.createElement("div");
+    el.style.position = "relative";
+    el.style.width = "703px";
+    el.style.minHeight = "auto";
+    el.style.margin = "0";
+    el.style.padding = "0";
+    el.style.background = "#ffffff";
+    el.style.pointerEvents = "none";
+
+    el.innerHTML = buildBillMarkup(order, allOrders, customers);
+    document.body.appendChild(el);
+
+    // 2. Wait for layout, fonts, and signature images to load
+    await waitForInvoiceRender();
+    await waitForInvoiceImages(el);
+
+    const invoiceNumber =
+      order.invoiceNo ||
+      `INV-${String(order.id || "XXXXX")
+        .toUpperCase()
+        .slice(-6)}`;
+    const filename = `Invoice_${invoiceNumber}.pdf`;
+
+    // 3. Option B PDF configuration options
+    const options = {
+      margin: [8, 8, 8, 8],
       filename,
-      image: { type: "jpeg", quality: 0.98 },
-      html2canvas: { scale: 2 },
-      jsPDF: { unit: "mm", format: "a5", orientation: "portrait" },
+      image: {
+        type: "jpeg",
+        quality: 0.98,
+      },
+      html2canvas: {
+        scale: 2,
+        useCORS: true,
+        allowTaint: false,
+        logging: false,
+        backgroundColor: "#ffffff",
+        imageTimeout: 15000,
+        scrollX: 0,
+        scrollY: 0,
+      },
+      jsPDF: {
+        unit: "mm",
+        format: [210, 222.75],
+        orientation: "portrait",
+        compress: true,
+      },
+      pagebreak: {
+        mode: ["avoid-all", "css", "legacy"],
+        avoid: ["div", "tr", "img"],
+      },
     };
-    const pdfDataUri = await window
-      .html2pdf()
-      .set(opt)
+
+    // 4. Generate PDF output URI string
+    const pdfDataUri = await html2pdf()
+      .set(options)
       .from(el)
       .outputPdf("datauristring");
-    const base64 = pdfDataUri.split(",")[1];
-    const file = await Filesystem.writeFile({
-      path: filename,
-      data: base64,
-      directory: Directory.Cache,
-      recursive: true,
-    });
-    document.body.removeChild(el);
-    await Share.share({
-      title: "Dairy bill",
-      text: `Bill for ${order.customerName || "customer"}`,
-      url: file.uri,
-      dialogTitle: "Share or print bill",
-    });
-  } catch (e) {
-    if (el.parentNode) document.body.removeChild(el);
-    openPrintable(order);
-  }
-}
 
-function openPrintable(order) {
-  const billMarkup = `
-      <div style="font-family: 'DM Sans', sans-serif; padding:18px; color:${C.ink}">
-        <h2 style="margin:0">${BUSINESS_NAME}</h2>
-        <div style="color:${C.inkMute}">${BUSINESS_TAGLINE}</div>
-        <hr />
-        <div>Customer: <b>${order.customerName || ""}</b></div>
-        ${order.items.map((it) => `<div style="display:flex; justify-content:space-between; margin-top:8px"><div>${it.qty} × ${it.productName}</div><div>${fmtINR((it.qty || 0) * (it.price || 0))}</div></div>`).join("")}
-        <hr />
-        <div style="font-weight:700; display:flex; justify-content:space-between"><div>Total</div><div>${fmtINR(order.total || 0)}</div></div>
-      </div>`;
+    const commaIndex = pdfDataUri.indexOf(",");
+    if (commaIndex === -1) {
+      throw new Error("Unable to generate PDF data.");
+    }
+    const base64Data = pdfDataUri.slice(commaIndex + 1);
 
-  const w = window.open("", "_blank");
-  if (w) {
-    w.document.write(
-      `<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`,
+    // 5. Cross-platform handling (Mobile Native vs Desktop Browser)
+    const isCapacitor =
+      typeof window !== "undefined" && window.Capacitor?.isNativePlatform?.();
+
+    if (isCapacitor) {
+      const file = await Filesystem.writeFile({
+        path: filename,
+        data: base64Data,
+        directory: Directory.Cache,
+        recursive: true,
+      });
+
+      try {
+        await Share.share({
+          title: "Tax Invoice",
+          text: `Invoice #${invoiceNumber} from ${typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : "A2D'Elites"}`,
+          url: file.uri,
+          dialogTitle: "Share Invoice PDF",
+        });
+      } catch (shareError) {
+        console.warn("Sharing cancelled or failed:", shareError);
+      }
+    } else {
+      const link = document.createElement("a");
+      link.href = pdfDataUri;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+  } catch (err) {
+    console.error("PDF Generation Error:", err);
+    alert(
+      err?.message ||
+        "Failed to generate PDF invoice. Falling back to print mode.",
     );
-    w.document.close();
-    w.onload = () => {
-      w.focus();
-      w.print();
-    };
-    return;
+    openPrintable(order, allOrders, customers);
+  } finally {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
   }
-
-  // Android WebView may block window.open, so print through a hidden iframe.
-  const frame = document.createElement("iframe");
-  frame.style.position = "fixed";
-  frame.style.width = "1px";
-  frame.style.height = "1px";
-  frame.style.right = "0";
-  frame.style.bottom = "0";
-  frame.style.border = "0";
-  document.body.appendChild(frame);
-  const frameDocument = frame.contentDocument || frame.contentWindow.document;
-  frameDocument.open();
-  frameDocument.write(
-    `<html><head><title>Bill</title></head><body>${billMarkup}</body></html>`,
-  );
-  frameDocument.close();
-  frame.onload = () => {
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-    setTimeout(() => frame.remove(), 1000);
-  };
 }
 
+function openPrintable(order, allOrders = [], customers = []) {
+  const billMarkup = buildBillMarkup(order, allOrders, customers);
+  const printWindow = window.open("", "_blank");
+
+  if (printWindow) {
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Invoice</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body { margin: 0; padding: 10px; background: #fff; }
+            @media print {
+              body { padding: 0; }
+            }
+          </style>
+        </head>
+        <body>
+          ${billMarkup}
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+    printWindow.onload = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+  }
+}
 /* ============================== ROOT APP ============================== */
 export default function App() {
   const [data, setData, isLoaded] = useCapacitorStorage(
@@ -2989,19 +2952,32 @@ function OrderModal({
     const draft = {
       id: initial?.id || uid("o"),
       customerId: customerId || uid("c"),
-      customerName: customerName.trim(),
-      phone,
-      address,
-      items,
-      orderDate,
-      deliveryDate,
-      paymentStatus,
-      amountPaid: paymentStatus === "Paid" ? total : Number(amountPaid) || 0,
-      orderStatus,
-      notes,
-      total,
+
+      // Preserve the data entered on the order itself.
+      customerName: String(customerName || "").trim(),
+      phone: String(phone || "").trim(),
+      address: String(address || "").trim(),
+
+      items: Array.isArray(items) ? items : [],
+
+      orderDate: orderDate || todayStr(),
+      deliveryDate: deliveryDate || "",
+
+      paymentStatus: paymentStatus || "Pending",
+
+      amountPaid:
+        paymentStatus === "Paid"
+          ? Number(total) || 0
+          : Math.max(0, Number(amountPaid) || 0),
+
+      orderStatus: orderStatus || "Pending",
+      notes: String(notes || "").trim(),
+
+      total: Number(total) || 0,
+
       createdAt: initial?.createdAt || new Date().toISOString(),
     };
+
     generateBill(draft);
   }
 
