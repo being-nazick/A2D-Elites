@@ -1,4 +1,11 @@
-﻿import { Calendar, ChevronLeft, ChevronRight, Plus } from "lucide-react";
+﻿import {
+  Calendar,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  MapPin,
+} from "lucide-react";
+import { Capacitor } from "@capacitor/core";
 import { DatetimePicker } from "@capawesome-team/capacitor-datetime-picker";
 import { C } from "../../app/constants";
 import {
@@ -8,9 +15,12 @@ import {
   iconFor,
   monthKey,
   todayStr,
+  hasCoordinates,
 } from "../../app/helpers";
 
 import { TopBar } from "../../components/Shared";
+import { Geolocation } from "@capacitor/geolocation";
+import { useEffect, useState } from "react";
 
 export default function Dashboard({
   data,
@@ -23,7 +33,84 @@ export default function Dashboard({
   navBtnStyle,
 }) {
   const isToday = selectedDate === todayStr();
+  const [myLocation, setMyLocation] = useState(null);
 
+  const [locationLoading, setLocationLoading] = useState(false);
+
+  useEffect(() => {
+    async function getMyLocation() {
+      setLocationLoading(true);
+
+      try {
+        let position;
+
+        if (Capacitor.isNativePlatform()) {
+          // Android / iOS
+          const permission = await Geolocation.requestPermissions();
+
+          if (
+            permission.location !== "granted" &&
+            permission.location !== "limited"
+          ) {
+            console.warn("Location permission denied");
+            return;
+          }
+
+          position = await Geolocation.getCurrentPosition({
+            enableHighAccuracy: true,
+            timeout: 10000,
+            maximumAge: 0,
+          });
+        } else {
+          // Chrome / Web
+          position = await new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+              reject(new Error("Browser does not support geolocation"));
+              return;
+            }
+
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+              enableHighAccuracy: true,
+              timeout: 10000,
+              maximumAge: 0,
+            });
+          });
+        }
+
+        const location = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        };
+
+        setMyLocation(location);
+
+        console.log("MY LOCATION:", location);
+      } catch (error) {
+        console.error("Could not get delivery person's location:", error);
+      } finally {
+        setLocationLoading(false);
+      }
+    }
+
+    getMyLocation();
+  }, []);
+
+  function getDistanceKm(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) ** 2;
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
+  }
   // Native Capacitor date picker
   const openDatePicker = async () => {
     try {
@@ -62,9 +149,52 @@ export default function Dashboard({
 
   const totalSales = active.reduce((sum, order) => sum + order.total, 0);
 
-  const pendingOrders = dayOrders.filter(
-    (order) => order.orderStatus === "Pending",
+  console.log(
+    "CUSTOMERS:",
+    data.customers.map((customer) => ({
+      name: customer.name,
+      latitude: customer.latitude,
+      longitude: customer.longitude,
+    })),
   );
+
+  const pendingOrders = dayOrders
+    .filter((order) => order.orderStatus === "Pending")
+    .map((order) => {
+      const customer = data.customers.find(
+        (customer) => customer.id === order.customerId,
+      );
+
+      let distanceKm = null;
+
+      if (
+        myLocation &&
+        customer &&
+        hasCoordinates({
+          latitude: customer.latitude,
+          longitude: customer.longitude,
+        })
+      ) {
+        distanceKm = getDistanceKm(
+          myLocation.latitude,
+          myLocation.longitude,
+          Number(customer.latitude),
+          Number(customer.longitude),
+        );
+      }
+
+      return {
+        ...order,
+        distanceKm,
+      };
+    })
+    .sort((a, b) => {
+      // Customers without GPS go to the bottom
+      if (a.distanceKm === null) return 1;
+      if (b.distanceKm === null) return -1;
+
+      return a.distanceKm - b.distanceKm;
+    });
 
   const deliveredOrders = dayOrders.filter(
     (order) => order.orderStatus === "Delivered",
@@ -477,7 +607,18 @@ export default function Dashboard({
           gap: 8,
         }}
       >
-        {pendingOrders.length === 0 && (
+        {locationLoading ? (
+          <div
+            style={{
+              textAlign: "center",
+              color: C.inkMute,
+              fontSize: 13,
+              padding: "18px 0",
+            }}
+          >
+            📍 Getting your location...
+          </div>
+        ) : pendingOrders.length === 0 ? (
           <div
             style={{
               textAlign: "center",
@@ -488,17 +629,49 @@ export default function Dashboard({
           >
             Nothing pending — everything's delivered. 🎉
           </div>
-        )}
+        ) : (
+          pendingOrders.map((order) => (
+            <div key={order.id}>
+              {order.distanceKm !== null && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontSize: 11,
+                    color: C.primary,
+                    fontWeight: 700,
+                    margin: "2px 4px 3px",
+                  }}
+                >
+                  <MapPin size={12} />
+                  {order.distanceKm < 1
+                    ? `${Math.round(order.distanceKm * 1000)} m away`
+                    : `${order.distanceKm.toFixed(1)} km away`}
+                </div>
+              )}
 
-        {pendingOrders.map((order) => (
-          <OrderRow
-            key={order.id}
-            order={order}
-            onOpenCustomer={onOpenCustomer}
-            actions={onQuickAction}
-            data={data}
-          />
-        ))}
+              {order.distanceKm === null && (
+                <div
+                  style={{
+                    fontSize: 10.5,
+                    color: C.inkMute,
+                    margin: "2px 4px 3px",
+                  }}
+                >
+                  📍 Location not available
+                </div>
+              )}
+
+              <OrderRow
+                order={order}
+                onOpenCustomer={onOpenCustomer}
+                actions={onQuickAction}
+                data={data}
+              />
+            </div>
+          ))
+        )}{" "}
       </div>
 
       <div style={{ height: 20 }} />

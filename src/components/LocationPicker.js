@@ -1,11 +1,18 @@
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, Marker, useMap, useMapEvents } from "react-leaflet";
+import { useEffect } from "react";
+import {
+  MapContainer,
+  TileLayer,
+  Marker,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 import L from "leaflet";
 
 // Fix default marker icon in Webpack/CRA
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
@@ -13,7 +20,7 @@ L.Icon.Default.mergeOptions({
 function ClickToPlace({ onSelect }) {
   useMapEvents({
     click(e) {
-      onSelect({ latitude: e.latlng.lat, longitude: e.latlng.lng });
+      onSelect({ latitude: e.latlng.lat, longitude: e.latlng.lng });  
     },
   });
   return null;
@@ -27,7 +34,12 @@ function RecenterOnChange({ lat, lng }) {
   return null;
 }
 
-export default function LocationPicker({ latitude, longitude, onChange, height = 220 }) {
+export default function LocationPicker({
+  latitude,
+  longitude,
+  onChange,
+  height = 220,
+}) {
   const hasPos =
     Number.isFinite(Number(latitude)) &&
     Number.isFinite(Number(longitude)) &&
@@ -35,11 +47,19 @@ export default function LocationPicker({ latitude, longitude, onChange, height =
     Number(longitude) !== 0;
 
   // Default to a fallback center (change to your city)
-  const DEFAULT_CENTER = [12.9716, 77.5946];
-  const center = hasPos ? [Number(latitude), Number(longitude)] : DEFAULT_CENTER;
+  const DEFAULT_CENTER = [13.0827, 80.2707];
+  const center = hasPos
+    ? [Number(latitude), Number(longitude)]
+    : DEFAULT_CENTER;
 
   return (
-    <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid #EAE1D0" }}>
+    <div
+      style={{
+        borderRadius: 12,
+        overflow: "hidden",
+        border: "1px solid #EAE1D0",
+      }}
+    >
       <MapContainer
         center={center}
         zoom={hasPos ? 16 : 13}
@@ -65,7 +85,9 @@ export default function LocationPicker({ latitude, longitude, onChange, height =
         ) : null}
 
         <ClickToPlace onSelect={onChange} />
-        {hasPos && <RecenterOnChange lat={Number(latitude)} lng={Number(longitude)} />}
+        {hasPos && (
+          <RecenterOnChange lat={Number(latitude)} lng={Number(longitude)} />
+        )}
       </MapContainer>
 
       <div

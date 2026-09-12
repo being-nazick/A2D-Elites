@@ -1,0 +1,124 @@
+/* src/styles/theme.css */
+:root {
+  --primary: hsl(170, 40%, 30%);
+  --primary-soft: hsl(170, 20%, 95%);
+  --bg: #fafafa;
+  --paper: #ffffff;
+  --paper-line: #e0e0e0;
+  --text: #111;
+  --text-muted: #555;
+  --radius: 8px;
+  --shadow: 0 2px 8px rgba(0,0,0,0.1);
+  --transition: all 0.2s ease;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  background: var(--primary);
+  color: #fff;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+button {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: var(--transition);
+}
+button:hover {
+  background: hsl(170, 40%, 25%);
+}
+
+.tab-bar {
+  display: flex;
+  background: var(--paper);
+  border-bottom: 1px solid var(--paper-line);
+}
+.tab-bar button {
+  flex: 1;
+  background: var(--paper);
+  color: var(--text);
+  border-radius: 0;
+  padding: 0.75rem;
+}
+.tab-bar button.active {
+  background: var(--primary-soft);
+  font-weight: 600;
+}
+
+.table-wrapper {
+  padding: 1rem 2rem;
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--paper);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+thead {
+  background: var(--primary-soft);
+}
+th, td {
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border-bottom: 1px solid var(--paper-line);
+}
+tr:hover {
+  background: var(--primary-soft);
+}
+
+.actions button {
+  margin-right: 0.4rem;
+  background: var(--primary);
+}
+
+/* Simple modal overlay */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.modal {
+  background: var(--paper);
+  padding: 1.5rem;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  width: 90%;
+  max-width: 500px;
+}
+.modal input {
+  width: 100%;
+  padding: 0.5rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--paper-line);
+  border-radius: var(--radius);
+}
+.modal button {
+  margin-right: 0.5rem;
+}

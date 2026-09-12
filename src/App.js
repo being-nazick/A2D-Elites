@@ -1,4 +1,5 @@
 import logoIcon from "./assets/logo.png";
+import logo1 from "./assets/logo1.png";
 import signatureImg from "./assets/signature.png";
 import React, { useState, useEffect, useMemo } from "react";
 import html2pdf from "html2pdf.js";
@@ -75,9 +76,10 @@ import {
   StatusPill,
 } from "./components/Shared";
 import LocationPicker from "./components/LocationPicker";
-import DashboardView from "./features/dashboard/Dashboard";
-import OrdersView from "./features/orders/OrdersTab";
+import DashboardTab from "./features/dashboard/Dashboard";
+import OrdersTab from "./features/orders/OrdersTab";
 
+// ------------------------ App Logic starts -----------------------
 function generateRecurringForToday(data) {
   const today = todayStr();
   const dayOfWeek = new Date().getDay();
@@ -153,21 +155,47 @@ function generateRecurringForToday(data) {
 }
 
 function csvDownload(filename, rows) {
-  const csv = rows
-    .map((r) =>
-      r.map((c) => `"${String(c ?? "").replace(/"/g, '""')}"`).join(","),
-    )
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  try {
+    const csv = rows
+      .map((row) =>
+        row
+          .map((cell) => {
+            const value = String(cell ?? "");
+            return `"${value.replace(/"/g, '""')}"`;
+          })
+          .join(","),
+      )
+      .join("\r\n");
+
+    const blob = new Blob(["\uFEFF", csv], {
+      type: "text/csv;charset=utf-8",
+    });
+
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.setAttribute("download", filename);
+    link.style.display = "none";
+
+    document.body.appendChild(link);
+
+    // Give the browser/webview time to start the download.
+    requestAnimationFrame(() => {
+      link.click();
+
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 1500);
+    });
+  } catch (error) {
+    console.error("CSV download failed:", error);
+    alert("Unable to download the CSV file.");
+  }
 }
+
 /* ============================== PDF / BILL GENERATION ============================== */
 
 /* -------------------------------------------------------------------------- */
@@ -212,10 +240,12 @@ function buildBillMarkup(order, allOrders = [], customers = []) {
     typeof fmtINR === "function"
       ? fmtINR
       : (v) => `₹${Number(v || 0).toFixed(2)}`;
+
   const _fmtDate =
     typeof fmtDate === "function"
       ? fmtDate
       : (d) => d || new Date().toISOString().split("T")[0];
+
   const _todayStr =
     typeof todayStr === "function"
       ? todayStr()
@@ -223,188 +253,834 @@ function buildBillMarkup(order, allOrders = [], customers = []) {
 
   const bizName =
     typeof BUSINESS_NAME !== "undefined" ? BUSINESS_NAME : "A2D'Elites";
+
   const bizTagline =
     typeof BUSINESS_TAGLINE !== "undefined" ? BUSINESS_TAGLINE : "SINCE 2025";
+
   const bizAddress =
     typeof BUSINESS_ADDRESS !== "undefined" ? BUSINESS_ADDRESS : "";
+
   const bizPhone = typeof BUSINESS_PHONE !== "undefined" ? BUSINESS_PHONE : "";
+
   const bizEmail = typeof BUSINESS_EMAIL !== "undefined" ? BUSINESS_EMAIL : "";
+
   const colors = typeof C !== "undefined" ? C : {};
+
   const sigImg = typeof signatureImg !== "undefined" ? signatureImg : "";
 
-  const customer = customers?.find((c) => c.id === order.customerId) || null;
+  /* ---------------------------------------------------------------------- */
+  /* CUSTOMER                                                               */
+  /* ---------------------------------------------------------------------- */
+
+  const customer =
+    customers?.find((c) => String(c.id) === String(order.customerId)) || null;
+
   const deliveryAddress =
     customer?.address || order.customerAddress || order.address || "—";
+
   const contactPhone = customer?.phone || order.phone || "—";
 
+  /* ---------------------------------------------------------------------- */
+  /* CURRENT INVOICE                                                        */
+  /* ---------------------------------------------------------------------- */
+
   const totalAmount =
-    order.total ||
+    Number(order.total) ||
     (order.items || []).reduce(
       (sum, it) => sum + (Number(it.qty) || 0) * (Number(it.price) || 0),
       0,
     );
+
   const amountPaid = Number(order.amountPaid) || 0;
+
   const balanceDue = Math.max(0, totalAmount - amountPaid);
+
   const totalQty = (order.items || []).reduce(
     (sum, item) => sum + (Number(item.qty) || 0),
     0,
   );
 
+  /* ---------------------------------------------------------------------- */
+  /* CUMULATIVE BALANCE                                                     */
+  /* ---------------------------------------------------------------------- */
+
+  /*
+   * IMPORTANT:
+   *
+   * The `order` argument is treated as the CURRENT invoice.
+   *
+   * We calculate previous outstanding from previous orders,
+   * then add the current invoice balance exactly once.
+   */
+
+  const currentOrderId = String(order.id);
+
+  const previousOrders = (allOrders || [])
+    .filter(
+      (o) =>
+        String(o.customerId) === String(order.customerId) &&
+        String(o.id) !== currentOrderId &&
+        o.orderStatus !== "Cancelled",
+    )
+    .sort((a, b) => {
+      const dateA = new Date(a.orderDate || 0).getTime();
+
+      const dateB = new Date(b.orderDate || 0).getTime();
+
+      if (dateA !== dateB) {
+        return dateA - dateB;
+      }
+
+      return String(a.id).localeCompare(String(b.id));
+    });
+
+  /*
+   * Sum outstanding balances from ALL previous orders.
+   */
+  const previousOutstanding = previousOrders.reduce((sum, previousOrder) => {
+    const previousTotal =
+      Number(previousOrder.total) ||
+      (previousOrder.items || []).reduce(
+        (itemSum, item) =>
+          itemSum + (Number(item.qty) || 0) * (Number(item.price) || 0),
+        0,
+      );
+
+    const previousPaid = Number(previousOrder.amountPaid) || 0;
+
+    const previousDue = Math.max(0, previousTotal - previousPaid);
+
+    return sum + previousDue;
+  }, 0);
+
+  /*
+   * FINAL cumulative balance:
+   *
+   * Previous outstanding
+   * +
+   * Current invoice outstanding
+   */
+  const totalCumulativeBalance = previousOutstanding + balanceDue;
+
+  /* ---------------------------------------------------------------------- */
+  /* BOTTLE BALANCE                                                         */
+  /* ---------------------------------------------------------------------- */
+
   const pastBottles = (allOrders || [])
     .filter(
       (o) =>
-        o.customerId === order.customerId &&
-        o.orderStatus !== "Cancelled" &&
-        o.id !== order.id,
+        String(o.customerId) === String(order.customerId) &&
+        String(o.id) !== currentOrderId &&
+        o.orderStatus !== "Cancelled",
     )
     .reduce((sum, o) => {
       const delivered = (o.items || [])
         .filter((it) => it.category === "Milk")
         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+
       const returned = Number(o.bottlesReturned) || 0;
-      return sum + delivered - returned;
+
+      return sum + Math.max(0, delivered - returned);
     }, 0);
 
   const currentDelivered = (order.items || [])
     .filter((it) => it.category === "Milk")
     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+
   const currentReturned = Number(order.bottlesReturned) || 0;
+
   const totalRemainingBottles = Math.max(
     0,
-    pastBottles + (currentDelivered - currentReturned),
+    pastBottles + currentDelivered - currentReturned,
   );
+
+  /* ---------------------------------------------------------------------- */
+  /* INVOICE NUMBER                                                         */
+  /* ---------------------------------------------------------------------- */
 
   const invoiceNo =
     order.invoiceNo ||
-    `INV-${(order.id || "XXXXX").toString().toUpperCase().slice(-6)}`;
+    `INV-${String(order.id || "XXXXX")
+      .toUpperCase()
+      .slice(-6)}`;
+
+  /* ---------------------------------------------------------------------- */
+  /* MARKUP                                                                 */
+  /* ---------------------------------------------------------------------- */
 
   return `
-    <div style="font-family: sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; width: 703px; margin: 0 auto; box-sizing: border-box; border: 1px solid ${colors.paperLine || "#ddd"}; border-radius: 8px;">
+    <div
+      style="
+        font-family: sans-serif;
+        font-size: 11px;
+        color: #111;
+        background: #fff;
+        padding: 20px;
+        width: 703px;
+        margin: 0 auto;
+        box-sizing: border-box;
+        border: 1px solid ${colors.paperLine || "#ddd"};
+        border-radius: 8px;
+      "
+    >
+<!-- HEADER -->
+<div
+  style="
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    border-bottom: 2px solid #111;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+  "
+>
+  <!-- LEFT: LOGO + BUSINESS DETAILS -->
+  <div
+    style="
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    "
+  >
+    <!-- LOGO -->
+    <div
+      style="
+        width: 60px;
+        height: 60px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      "
+    >
+      <img
+        src="${logo1}"
+        alt="Business Logo"
+        style="
+          width: 60px;
+          height: 60px;
+          object-fit: contain;
+        "
+      />
+    </div>
 
-      <!-- HEADER SECTION -->
-      <div style="display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #111; padding-bottom: 12px; margin-bottom: 12px;">
-        <div style="display: flex; gap: 12px; align-items: center;">
-          <div>
-            <h1 style="font-size: 16px; font-weight: 800; margin: 0; text-transform: uppercase;">${bizName}</h1>
-            <div style="font-size: 9px; color: #555; text-transform: uppercase;">${bizTagline}</div>
-            <div style="font-size: 9px; color: #444; margin-top: 4px; line-height: 1.3;">
-              ${bizAddress ? `<div>${bizAddress}</div>` : ""}
-              ${bizPhone || bizEmail ? `<div>Ph: ${bizPhone} ${bizEmail ? `| ${bizEmail}` : ""}</div>` : ""}
-            </div>
-          </div>
-        </div>
-        <div style="text-align: right;">
-          <h2 style="font-size: 18px; margin: 0; font-weight: 900; letter-spacing: 1px;">INVOICE</h2>
-          <span style="display: inline-block; background: #eee; border: 1px solid #ccc; font-size: 8px; font-weight: 700; padding: 2px 6px; margin-top: 4px;">
-            ${order.copyType || "ORIGINAL"}
-          </span>
-        </div>
+    <!-- BUSINESS DETAILS -->
+    <div>
+      <h1
+        style="
+          font-size: 16px;
+          font-weight: 800;
+          margin: 0;
+          text-transform: uppercase;
+        "
+      >
+        ${bizName}
+      </h1>
+
+      <div
+        style="
+          font-size: 9px;
+          color: #555;
+          text-transform: uppercase;
+        "
+      >
+        ${bizTagline}
       </div>
 
-      <!-- METADATA GRID -->
-      <div style="display: flex; justify-content: space-between; margin-bottom: 14px; font-size: 10px;">
-        <div style="width: 55%;">
-          <div style="font-weight: 700; text-transform: uppercase; color: #666; margin-bottom: 2px;">Billing Address:</div>
-          <div style="font-weight: 700; font-size: 11px;">${order.customerName || customer?.name || "—"}</div>
-          <div style="color: #333; line-height: 1.3;">${deliveryAddress}</div>
-          <div style="color: #333; margin-top: 2px;">Ph: ${contactPhone}</div>
-        </div>
-        <div style="width: 40%; text-align: right; line-height: 1.4;">
-          <div><b>Invoice #:</b> ${invoiceNo}</div>
-          <div><b>Invoice Date:</b> ${_fmtDate(_todayStr)}</div>
-          <div><b>Order Date:</b> ${_fmtDate(order.orderDate || _todayStr)}</div>
-        </div>
+      <div
+        style="
+          font-size: 9px;
+          color: #444;
+          margin-top: 4px;
+          line-height: 1.3;
+        "
+      >
+        ${bizAddress ? `<div>${bizAddress}</div>` : ""}
+
+        ${
+          bizPhone || bizEmail
+            ? `<div>
+                Ph: ${bizPhone}
+                ${bizEmail ? `| ${bizEmail}` : ""}
+              </div>`
+            : ""
+        }
       </div>
-
-      <!-- LINE ITEMS TABLE -->
-      <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 10px;">
-        <thead>
-          <tr style="background: #f4f4f4; border-top: 1px solid #111; border-bottom: 1px solid #111; text-align: left;">
-            <th style="padding: 6px; width: 5%;">#</th>
-            <th style="padding: 6px;">Item</th>
-            <th style="padding: 6px; text-align: right;">Rate</th>
-            <th style="padding: 6px; text-align: center;">Qty</th>
-            <th style="padding: 6px; text-align: right;">Amount</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${(order.items || [])
-            .map(
-              (it, idx) => `
-            <tr style="border-bottom: 1px solid #eee;">
-              <td style="padding: 6px;">${idx + 1}</td>
-              <td style="padding: 6px; font-weight: 600;">${it.productName || it.name || "Item"}</td>
-              <td style="padding: 6px; text-align: right;">${_fmtINR(it.price || 0)}</td>
-              <td style="padding: 6px; text-align: center;">${it.qty || 0} ${it.unit || "PCS"}</td>
-              <td style="padding: 6px; text-align: right; font-weight: 600;">${_fmtINR((it.qty || 0) * (it.price || 0))}</td>
-            </tr>
-          `,
-            )
-            .join("")}
-          <tr style="border-top: 1px solid #111; font-weight: 600;">
-            <td colspan="4" style="padding: 6px; text-align: right;">Subtotal</td>
-            <td style="padding: 6px; text-align: right;">${_fmtINR(totalAmount)}</td>
-          </tr>
-          ${
-            amountPaid > 0
-              ? `
-          <tr style="color: #2e7d32;">
-            <td colspan="4" style="padding: 4px 6px; text-align: right;">Amount Paid</td>
-            <td style="padding: 4px 6px; text-align: right;">${_fmtINR(amountPaid)}</td>
-          </tr>
-          <tr style="border-top: 1px solid #111; font-weight: 700; font-size: 11px;">
-            <td colspan="4" style="padding: 6px; text-align: right;">Balance Due</td>
-            <td style="padding: 6px; text-align: right;">${_fmtINR(balanceDue)}</td>
-          </tr>
-          `
-              : ""
-          }
-        </tbody>
-      </table>
-
-      <!-- SUMMARY & BOTTLE BALANCE -->
-      <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; margin-bottom: 14px; border-bottom: 1px dashed #ccc; padding-bottom: 8px;">
-        <div><b>Total Items:</b> ${order.items ? order.items.length : 0} (${totalQty} Qty)</div>
-        <div style="background: ${colors.goldSoft || "#fff8e1"}; border: 1px solid #ffe082; padding: 4px 8px; border-radius: 4px; font-weight: 700; color: ${colors.primaryDark || "#000"};">
-          🍼 Bottles Due: ${totalRemainingBottles}
-        </div>
-      </div>
-
-      <!-- BANK DETAILS & QR CODE -->
-<div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 14px; gap: 12px;">
-  
-  <!-- Left Side: Bank Details -->
-  <div style="width: 50%; font-size: 9px; line-height: 1.4;">
-    <div style="font-weight: 700; text-transform: uppercase; margin-bottom: 4px;">Bank Details:</div>
-    <div><b>Bank:</b> ${order.bankName || "Indian Bank"}</div>
-    <div><b>Holder:</b> ${order.accountHolder || "Deena Dhayalan R"}</div>
-    <div><b>A/C:</b> ${order.accountNumber || "7084125477"}</div>
-    <div><b>IFSC:</b> ${order.ifscCode || "IDIB000M206"}</div>
-  </div>
-
-  <!-- Right Side: Global QR Code Image & Payable Amount -->
-  <div style="width: 45%; display: flex; align-items: center; justify-content: flex-end; gap: 10px;">
-    ${
-      typeof qrImg !== "undefined" && qrImg
-        ? `<div style="text-align: center;">
-            <img src="${qrImg}" style="width: 70px; height: 70px; object-fit: contain; border: 1px solid #ddd; padding: 2px; border-radius: 4px;" alt="Payment QR" />
-            <div style="font-size: 7px; color: #555; margin-top: 2px; font-weight: 600;">Scan to Pay</div>
-          </div>`
-        : ""
-    }
-    <div style="background: #fff8e1; border: 1px solid #ffe082; padding: 8px 12px; border-radius: 4px; text-align: center; min-width: 90px;">
-      <div style="font-size: 8px; text-transform: uppercase; color: #555;">Payable</div>
-      <div style="font-size: 14px; font-weight: 800; color: #000;">${_fmtINR(balanceDue)}</div>
     </div>
   </div>
 
+  <!-- RIGHT: INVOICE -->
+  <div style="text-align: right;">
+    <h2
+      style="
+        font-size: 18px;
+        margin: 0;
+        font-weight: 900;
+        letter-spacing: 1px;
+      "
+    >
+      INVOICE
+    </h2>
+
+    <span
+      style="
+        display: inline-block;
+        background: #eee;
+        border: 1px solid #ccc;
+        font-size: 8px;
+        font-weight: 700;
+        padding: 2px 6px;
+        margin-top: 4px;
+      "
+    >
+      ${order.copyType || "ORIGINAL"}
+    </span>
+  </div>
 </div>
+
+
+      <!-- CUSTOMER / META -->
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 14px;
+          font-size: 10px;
+        "
+      >
+        <div style="width: 55%;">
+          <div
+            style="
+              font-weight: 700;
+              text-transform: uppercase;
+              color: #666;
+              margin-bottom: 2px;
+            "
+          >
+            Billing Address:
+          </div>
+
+          <div
+            style="
+              font-weight: 700;
+              font-size: 11px;
+            "
+          >
+            ${order.customerName || customer?.name || "—"}
+          </div>
+
+          <div
+            style="
+              color: #333;
+              line-height: 1.3;
+            "
+          >
+            ${deliveryAddress}
+          </div>
+
+          <div
+            style="
+              color: #333;
+              margin-top: 2px;
+            "
+          >
+            Ph: ${contactPhone}
+          </div>
+        </div>
+
+        <div
+          style="
+            width: 40%;
+            text-align: right;
+            line-height: 1.4;
+          "
+        >
+          <div>
+            <b>Invoice #:</b> ${invoiceNo}
+          </div>
+
+          <div>
+            <b>Invoice Date:</b>
+            ${_fmtDate(_todayStr)}
+          </div>
+
+          <div>
+            <b>Order Date:</b>
+            ${_fmtDate(order.orderDate || _todayStr)}
+          </div>
+        </div>
+      </div>
+
+      <!-- ITEMS -->
+      <table
+        style="
+          width: 100%;
+          border-collapse: collapse;
+          margin-bottom: 12px;
+          font-size: 10px;
+        "
+      >
+        <thead>
+          <tr
+            style="
+              background: #f4f4f4;
+              border-top: 1px solid #111;
+              border-bottom: 1px solid #111;
+              text-align: left;
+            "
+          >
+            <th style="padding: 6px; width: 5%;">
+              #
+            </th>
+
+            <th style="padding: 6px;">
+              Item
+            </th>
+
+            <th
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              Rate
+            </th>
+
+            <th
+              style="
+                padding: 6px;
+                text-align: center;
+              "
+            >
+              Qty
+            </th>
+
+            <th
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              Amount
+            </th>
+          </tr>
+        </thead>
+
+        <tbody>
+
+          ${(order.items || [])
+            .map(
+              (it, idx) => `
+                <tr
+                  style="
+                    border-bottom: 1px solid #eee;
+                  "
+                >
+                  <td style="padding: 6px;">
+                    ${idx + 1}
+                  </td>
+
+                  <td
+                    style="
+                      padding: 6px;
+                      font-weight: 600;
+                    "
+                  >
+                    ${it.productName || it.name || "Item"}
+                  </td>
+
+                  <td
+                    style="
+                      padding: 6px;
+                      text-align: right;
+                    "
+                  >
+                    ${_fmtINR(it.price || 0)}
+                  </td>
+
+                  <td
+                    style="
+                      padding: 6px;
+                      text-align: center;
+                    "
+                  >
+                    ${it.qty || 0}
+                    ${it.unit || "PCS"}
+                  </td>
+
+                  <td
+                    style="
+                      padding: 6px;
+                      text-align: right;
+                      font-weight: 600;
+                    "
+                  >
+                    ${_fmtINR((Number(it.qty) || 0) * (Number(it.price) || 0))}
+                  </td>
+                </tr>
+              `,
+            )
+            .join("")}
+
+          <!-- SUBTOTAL -->
+          <tr
+            style="
+              border-top: 1px solid #111;
+              font-weight: 600;
+            "
+          >
+            <td
+              colspan="4"
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              Subtotal
+            </td>
+
+            <td
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              ${_fmtINR(totalAmount)}
+            </td>
+          </tr>
+
+          <!-- PAID -->
+          ${
+            amountPaid > 0
+              ? `
+                <tr style="color: #2e7d32;">
+                  <td
+                    colspan="4"
+                    style="
+                      padding: 4px 6px;
+                      text-align: right;
+                    "
+                  >
+                    Amount Paid
+                  </td>
+
+                  <td
+                    style="
+                      padding: 4px 6px;
+                      text-align: right;
+                    "
+                  >
+                    ${_fmtINR(amountPaid)}
+                  </td>
+                </tr>
+              `
+              : ""
+          }
+
+          <!-- CURRENT BALANCE -->
+          <tr
+            style="
+              border-top: 1px solid #111;
+              font-weight: 700;
+              font-size: 11px;
+            "
+          >
+            <td
+              colspan="4"
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              Balance Due (This Invoice)
+            </td>
+
+            <td
+              style="
+                padding: 6px;
+                text-align: right;
+              "
+            >
+              ${_fmtINR(balanceDue)}
+            </td>
+          </tr>
+
+          <!-- PREVIOUS OUTSTANDING -->
+          ${
+            previousOutstanding > 0
+              ? `
+                <tr>
+                  <td
+                    colspan="4"
+                    style="
+                      padding: 4px 6px;
+                      text-align: right;
+                      color: #555;
+                    "
+                  >
+                    Previous Outstanding Balance
+                  </td>
+
+                  <td
+                    style="
+                      padding: 4px 6px;
+                      text-align: right;
+                      color: #555;
+                    "
+                  >
+                    ${_fmtINR(previousOutstanding)}
+                  </td>
+                </tr>
+              `
+              : ""
+          }
+
+          <!-- CUMULATIVE -->
+          <tr
+            style="
+              border-top: 2px solid #111;
+              font-weight: 800;
+              font-size: 12px;
+              background: #fafafa;
+            "
+          >
+            <td
+              colspan="4"
+              style="
+                padding: 8px 6px;
+                text-align: right;
+              "
+            >
+              Total Cumulative Balance Due
+            </td>
+
+            <td
+              style="
+                padding: 8px 6px;
+                text-align: right;
+                color: ${totalCumulativeBalance > 0 ? "#d32f2f" : "#2e7d32"};
+              "
+            >
+              ${_fmtINR(totalCumulativeBalance)}
+            </td>
+          </tr>
+
+        </tbody>
+      </table>
+
+      <!-- SUMMARY -->
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 10px;
+          margin-bottom: 14px;
+          border-bottom: 1px dashed #ccc;
+          padding-bottom: 8px;
+        "
+      >
+        <div>
+          <b>Total Items:</b>
+          ${order.items ? order.items.length : 0}
+          (${totalQty} Qty)
+        </div>
+
+        <div
+          style="
+            background: ${colors.goldSoft || "#fff8e1"};
+            border: 1px solid #ffe082;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 700;
+            color: ${colors.primaryDark || "#000"};
+          "
+        >
+          🍼 Bottles Due:
+          ${totalRemainingBottles}
+        </div>
+      </div>
+
+      <!-- BANK / QR -->
+      <div
+        style="
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 14px;
+          gap: 12px;
+        "
+      >
+        <div
+          style="
+            width: 50%;
+            font-size: 9px;
+            line-height: 1.4;
+          "
+        >
+          <div
+            style="
+              font-weight: 700;
+              text-transform: uppercase;
+              margin-bottom: 4px;
+            "
+          >
+            Bank Details:
+          </div>
+
+          <div>
+            <b>Bank:</b>
+            ${order.bankName || "Indian Bank"}
+          </div>
+
+          <div>
+            <b>Holder:</b>
+            ${order.accountHolder || "Deena Dhayalan R"}
+          </div>
+
+          <div>
+            <b>A/C:</b>
+            ${order.accountNumber || "7084125477"}
+          </div>
+
+          <div>
+            <b>IFSC:</b>
+            ${order.ifscCode || "IDIB000M206"}
+          </div>
+        </div>
+
+        <div
+          style="
+            width: 45%;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 10px;
+          "
+        >
+          ${
+            typeof qrImg !== "undefined" && qrImg
+              ? `
+                <div style="text-align: center;">
+                  <img
+                    src="${qrImg}"
+                    style="
+                      width: 70px;
+                      height: 70px;
+                      object-fit: contain;
+                      border: 1px solid #ddd;
+                      padding: 2px;
+                      border-radius: 4px;
+                    "
+                    alt="Payment QR"
+                  />
+
+                  <div
+                    style="
+                      font-size: 7px;
+                      color: #555;
+                      margin-top: 2px;
+                      font-weight: 600;
+                    "
+                  >
+                    Scan to Pay
+                  </div>
+          ${UPI_ID} || ${UPI_PAYEE_NAME}
+        
+                </div>
+              `
+              : ""
+          }
+
+          <div
+            style="
+              background: #fff8e1;
+              border: 1px solid #ffe082;
+              padding: 8px 12px;
+              border-radius: 4px;
+              text-align: center;
+              min-width: 110px;
+            "
+          >
+            <div
+              style="
+                font-size: 8px;
+                text-transform: uppercase;
+                color: #555;
+                font-weight: 700;
+              "
+            >
+              Total Outstanding
+            </div>
+
+            <div
+              style="
+                font-size: 15px;
+                font-weight: 800;
+                color: ${totalCumulativeBalance > 0 ? "#d32f2f" : "#2e7d32"};
+                margin-top: 2px;
+              "
+            >
+              ${_fmtINR(totalCumulativeBalance)}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- FOOTER -->
-      <div style="text-align: center; border-top: 1px solid #111; padding-top: 8px; margin-top: 10px;">
-        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-          ${sigImg ? `<img src="${sigImg}" style="height: 35px; max-width: 100px; object-fit: contain;" onError="this.style.display='none'" alt="Signature" />` : ""}
-          <div style="font-size: 8px; color: #555;">For <b>${bizName}</b></div>
-          <div style="border-top: 1px solid #888; padding-top: 2px; font-weight: 600; font-size: 8px; width: 120px;">Authorized Signatory</div>
+      <div
+        style="
+          text-align: center;
+          border-top: 1px solid #111;
+          padding-top: 8px;
+          margin-top: 10px;
+        "
+      >
+        <div
+          style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+          "
+        >
+          ${
+            sigImg
+              ? `
+                <img
+                  src="${sigImg}"
+                  style="
+                    height: 35px;
+                    max-width: 100px;
+                    object-fit: contain;
+                  "
+                  onError="this.style.display='none'"
+                  alt="Signature"
+                />
+              `
+              : ""
+          }
+
+          <div
+            style="
+              font-size: 8px;
+              color: #555;
+            "
+          >
+            For <b>${bizName}</b>
+          </div>
+
+          <div
+            style="
+              border-top: 1px solid #888;
+              padding-top: 2px;
+              font-weight: 600;
+              font-size: 8px;
+              width: 120px;
+            "
+          >
+            Authorized Signatory
+          </div>
         </div>
       </div>
 
@@ -533,36 +1209,54 @@ async function generateBill(order, allOrders = [], customers = []) {
     }
   }
 }
-
 function openPrintable(order, allOrders = [], customers = []) {
   const billMarkup = buildBillMarkup(order, allOrders, customers);
+
   const printWindow = window.open("", "_blank");
 
-  if (printWindow) {
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Invoice</title>
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <style>
-            body { margin: 0; padding: 10px; background: #fff; }
-            @media print {
-              body { padding: 0; }
-            }
-          </style>
-        </head>
-        <body>
-          ${billMarkup}
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-    printWindow.onload = () => {
-      printWindow.focus();
-      printWindow.print();
-    };
+  if (!printWindow) {
+    alert("Please allow popups to print the invoice.");
+    return;
   }
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+      <head>
+        <title>Invoice</title>
+
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1.0"
+        >
+
+        <style>
+          body {
+            margin: 0;
+            padding: 10px;
+            background: #fff;
+          }
+
+          @media print {
+            body {
+              padding: 0;
+            }
+          }
+        </style>
+      </head>
+
+      <body>
+        ${billMarkup}
+      </body>
+    </html>
+  `);
+
+  printWindow.document.close();
+
+  printWindow.onload = () => {
+    printWindow.focus();
+    printWindow.print();
+  };
 }
 /* ============================== ROOT APP ============================== */
 export default function App() {
@@ -675,6 +1369,7 @@ export default function App() {
       };
     });
     setReturnModalOrder(null);
+    openDeliveryWhatsApp(deliveredOrder, data.customers);
   }
 
   function markPaid(id) {
@@ -761,7 +1456,7 @@ export default function App() {
       <div style={{ maxWidth: 480, margin: "0 auto", position: "relative" }}>
         <SharedAppHeader logo={logoIcon} />
         {tab === "dashboard" && (
-          <DashboardView
+          <DashboardTab
             data={data}
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
@@ -782,9 +1477,8 @@ export default function App() {
           />
         )}
         {tab === "orders" && (
-          <OrdersView
+          <OrdersTab
             data={data}
-            allData={data}
             onAdd={() => setOrderModal({})}
             onEdit={(o) => setOrderModal({ order: o })}
             onDelete={deleteOrder}
@@ -997,7 +1691,7 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
           />
         )}
         <ActionBtn
-          onClick={() => generateBill(order)}
+          onClick={() => generateBill(order, data.orders, data.customers)}
           icon={Download}
           label="Bill"
           tone={C.primary}
@@ -1027,15 +1721,6 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
           tone={C.brick}
           toneSoft={C.brickSoft}
         />
-        {order.phone && (
-          <ActionBtn
-            onClick={() => openDeliveryWhatsApp(order, data?.orders || [])}
-            icon={Phone}
-            label="WhatsApp"
-            tone={C.green}
-            toneSoft={C.greenSoft}
-          />
-        )}
       </div>
     </div>
   );
@@ -1129,7 +1814,6 @@ function CustomersTab({
         : [...current, customerId],
     );
   }
-
   if (activeCustomer) {
     const full = stats.find((c) => c.id === activeCustomer.id) || {
       ...activeCustomer,
@@ -1137,12 +1821,72 @@ function CustomersTab({
       totalAmount: 0,
       pending: 0,
       lastOrder: null,
+      bottlesOwed: 0,
     };
-    const orders = data.orders
+
+    // ---------------------------------------------------------
+    // SAFE ORDER TOTAL
+    // ---------------------------------------------------------
+    const getOrderTotal = (order) => {
+      if (order.total !== undefined && order.total !== null) {
+        return Number(order.total) || 0;
+      }
+
+      return (order.items || []).reduce(
+        (sum, item) =>
+          sum + (Number(item.qty) || 0) * (Number(item.price) || 0),
+        0,
+      );
+    };
+
+    // ---------------------------------------------------------
+    // ALL CUSTOMER ORDERS - NEWEST FIRST
+    // ---------------------------------------------------------
+    const orders = (data.orders || [])
       .filter((o) => o.customerId === activeCustomer.id)
-      .sort((a, b) => b.orderDate.localeCompare(a.orderDate));
+      .sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0));
+
+    // ---------------------------------------------------------
+    // LEDGER ORDERS - OLDEST FIRST
+    // Used only for cumulative balance calculation
+    // ---------------------------------------------------------
+    const ledgerOrders = orders
+      .filter((o) => o.orderStatus !== "Cancelled")
+      .slice()
+      .sort((a, b) => new Date(a.orderDate || 0) - new Date(b.orderDate || 0));
+
+    // ---------------------------------------------------------
+    // CUMULATIVE CUSTOMER BALANCE
+    // ---------------------------------------------------------
+    let runningBalance = 0;
+    const cumulativeBalanceMap = {};
+
+    ledgerOrders.forEach((o) => {
+      const total = getOrderTotal(o);
+      const paid = Number(o.amountPaid) || 0;
+
+      const due = Math.max(0, total - paid);
+
+      runningBalance += due;
+
+      cumulativeBalanceMap[o.id] = runningBalance;
+    });
+
+    // ---------------------------------------------------------
+    // CURRENT CUSTOMER OUTSTANDING BALANCE
+    // ---------------------------------------------------------
+    const customerBalance = ledgerOrders.reduce((sum, o) => {
+      const total = getOrderTotal(o);
+      const paid = Number(o.amountPaid) || 0;
+
+      return sum + Math.max(0, total - paid);
+    }, 0);
+
     return (
       <div>
+        {/* =====================================================
+          HEADER
+      ====================================================== */}
         <div
           style={{
             padding: "18px 16px 8px",
@@ -1158,6 +1902,7 @@ function CustomersTab({
           >
             <ArrowLeft size={16} />
           </button>
+
           <div
             style={{
               fontFamily: "'Fraunces',serif",
@@ -1168,7 +1913,11 @@ function CustomersTab({
             {full.name}
           </div>
         </div>
+
         <div style={{ padding: "0 16px" }}>
+          {/* =================================================
+            PHONE
+        ================================================== */}
           {full.phone && (
             <div
               style={{
@@ -1184,6 +1933,10 @@ function CustomersTab({
               {full.phone}
             </div>
           )}
+
+          {/* =================================================
+            ADDRESS
+        ================================================== */}
           {full.address && (
             <div
               style={{
@@ -1199,6 +1952,10 @@ function CustomersTab({
               {full.address}
             </div>
           )}
+
+          {/* =================================================
+            NAVIGATION
+        ================================================== */}
           {hasCoordinates(full) && (
             <a
               href={`https://www.google.com/maps/dir/?api=1&destination=${full.latitude},${full.longitude}`}
@@ -1214,10 +1971,14 @@ function CustomersTab({
                 fontWeight: 700,
               }}
             >
-              <Navigation size={13} /> Navigate to customer
+              <Navigation size={13} />
+              Navigate to customer
             </a>
           )}
 
+          {/* =================================================
+            CUSTOMER STATS
+        ================================================== */}
           <div
             style={{
               display: "grid",
@@ -1227,27 +1988,40 @@ function CustomersTab({
             }}
           >
             <MiniStat label="Total Orders" value={full.totalOrders} />
+
             <MiniStat
               label="Total Purchased"
               value={fmtINR(full.totalAmount)}
             />
+
             <MiniStat
               label="Pending Payment"
-              value={fmtINR(full.pending)}
-              tone={C.brick}
+              value={fmtINR(customerBalance)}
+              tone={customerBalance > 0 ? C.brick : C.ink}
             />
+
             <MiniStat
               label="Bottles Owed"
               value={full.bottlesOwed || 0}
               tone={full.bottlesOwed > 0 ? C.gold : C.ink}
             />
+
             <MiniStat
               label="Last Order"
               value={full.lastOrder ? fmtDateShort(full.lastOrder) : "—"}
             />
           </div>
 
-          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          {/* =================================================
+            ACTION BUTTONS
+        ================================================== */}
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginTop: 14,
+            }}
+          >
             <button
               className="tap"
               onClick={() => onNewOrderFor(full)}
@@ -1264,6 +2038,7 @@ function CustomersTab({
             >
               + New Order
             </button>
+
             <button
               className="tap"
               onClick={() => onEditCustomer(full)}
@@ -1278,6 +2053,7 @@ function CustomersTab({
             >
               <Edit2 size={14} />
             </button>
+
             <button
               className="tap"
               onClick={() => {
@@ -1304,6 +2080,9 @@ function CustomersTab({
             </button>
           </div>
 
+          {/* =================================================
+            ORDER HISTORY
+        ================================================== */}
           <div
             style={{
               fontWeight: 700,
@@ -1315,6 +2094,10 @@ function CustomersTab({
             Order History
           </div>
         </div>
+
+        {/* =====================================================
+          ORDERS
+      ====================================================== */}
         <div
           style={{
             padding: "0 16px",
@@ -1324,49 +2107,188 @@ function CustomersTab({
           }}
         >
           {orders.length === 0 && (
-            <div style={{ color: C.inkMute, fontSize: 13 }}>No orders yet.</div>
-          )}
-          {orders.map((o) => (
             <div
-              key={o.id}
-              className="tap"
-              onClick={() => onEditOrder(o)}
               style={{
-                background: C.paper,
-                border: `1px solid ${C.paperLine}`,
-                borderRadius: 12,
-                padding: "10px 12px",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
+                color: C.inkMute,
+                fontSize: 13,
               }}
             >
-              <div>
-                <div
-                  style={{
-                    fontSize: 11,
-                    color: C.inkMute,
-                    fontFamily: "'JetBrains Mono',monospace",
-                  }}
-                >
-                  {fmtDateShort(o.orderDate)}
-                </div>
-                <QtyLine items={o.items} />
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontFamily: "'JetBrains Mono',monospace",
-                  }}
-                >
-                  {fmtINR(o.total)}
-                </div>
-                <StatusPill status={o.orderStatus} kind="order" />
-              </div>
+              No orders yet.
             </div>
-          ))}
+          )}
+
+          {orders.map((o) => {
+            const isCancelled = o.orderStatus === "Cancelled";
+
+            const orderTotal = getOrderTotal(o);
+
+            const amountPaid = Number(o.amountPaid) || 0;
+
+            const orderDue = Math.max(0, orderTotal - amountPaid);
+
+            const cumBal = cumulativeBalanceMap[o.id];
+
+            return (
+              <div
+                key={o.id}
+                className="tap"
+                onClick={() => onEditOrder(o)}
+                style={{
+                  background: C.paper,
+                  border: `1px solid ${C.paperLine}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                {/* =========================================
+                  LEFT
+              ========================================== */}
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: C.inkMute,
+                      fontFamily: "'JetBrains Mono',monospace",
+                    }}
+                  >
+                    {fmtDateShort(o.orderDate)}
+                  </div>
+
+                  <QtyLine items={o.items} />
+
+                  {!isCancelled && orderDue > 0 && (
+                    <div
+                      style={{
+                        marginTop: 3,
+                        fontSize: 10,
+                        color: C.brick,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {fmtINR(orderDue)} due
+                    </div>
+                  )}
+                </div>
+
+                {/* =========================================
+                  RIGHT
+              ========================================== */}
+                <div
+                  style={{
+                    textAlign: "right",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontFamily: "'JetBrains Mono',monospace",
+                    }}
+                  >
+                    {fmtINR(orderTotal)}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "flex-end",
+                      gap: 6,
+                      marginTop: 3,
+                    }}
+                  >
+                    {/* =====================================
+                      CUMULATIVE BALANCE
+                  ====================================== */}
+                    {!isCancelled && cumBal !== undefined && (
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          background:
+                            cumBal > 0 ? C.brickSoft || "#ffebee" : "#f1f3f5",
+                          color: cumBal > 0 ? C.brick || "#c62828" : "#6c757d",
+                          fontFamily: "'JetBrains Mono',monospace",
+                          cursor:
+                            o.orderStatus === "Delivered"
+                              ? "pointer"
+                              : "default",
+                        }}
+                      >
+                        Cum. Bal: {fmtINR(cumBal)}
+                      </span>
+                    )}
+
+                    {/* =====================================
+                      DELIVERY STATUS
+                      CLICKING DELIVERED OPENS WHATSAPP
+                  ====================================== */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+
+                        if (o.orderStatus === "Delivered") {
+                          openDeliveryWhatsApp(o, data.customers);
+                        }
+                      }}
+                      style={{
+                        cursor:
+                          o.orderStatus === "Delivered" ? "pointer" : "default",
+                      }}
+                      title={
+                        o.orderStatus === "Delivered"
+                          ? "Open delivery WhatsApp"
+                          : undefined
+                      }
+                    >
+                      {o.orderStatus === "Delivered" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDeliveryWhatsApp(o, data.customers);
+                          }}
+                          style={{
+                            border: "none",
+                            padding: 0,
+                            margin: 0,
+                            background: "transparent",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <StatusPill status="Delivered" kind="order" />
+                        </button>
+                      ) : (
+                        <StatusPill status={o.orderStatus} kind="order" />
+                      )}
+                    </div>
+                  </div>
+
+                  {/* =====================================
+                    PAYMENT STATUS
+                ====================================== */}
+                  {!isCancelled && (
+                    <div
+                      style={{
+                        marginTop: 3,
+                        fontSize: 9.5,
+                        color: orderDue > 0 ? C.brick : C.green,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {orderDue > 0 ? `${fmtINR(orderDue)} due` : "Paid"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
+
         <div style={{ height: 16 }} />
       </div>
     );
@@ -1586,9 +2508,9 @@ function ReportsTab({ data }) {
     productTotals,
     dailySeries,
   } = useMemo(() => {
-    const sales = monthOrders.reduce((s, o) => s + o.total, 0);
+    const sales = monthOrders.reduce((s, o) => s + Number(o.total), 0);
     const paid = monthOrders.reduce(
-      (s, o) => s + (o.paymentStatus === "Paid" ? o.total : o.amountPaid || 0),
+      (s, o) => s + (o.paymentStatus === "Paid" ? Number(o.total) : Number(o.amountPaid || 0)),
       0,
     );
     const pending = sales - paid;
@@ -1665,48 +2587,54 @@ function ReportsTab({ data }) {
 
   // CSV Exports wrapped in quotes to prevent structural corruption from commas in names/addresses
   function exportMonthlyCSV() {
-    const rows = [
-      [
-        "Date",
-        "Customer",
-        "Phone",
-        "Products",
-        "Total",
-        "Payment Status",
-        "Order Status",
-      ],
-    ];
-    monthOrders.forEach((o) => {
-      const itemsStr = o.items
-        .map((it) => `${it.qty}${it.unit} ${it.productName}`)
-        .join(" + ");
-      rows.push([
-        o.orderDate,
-        `"${o.customerName || ""}"`,
-        `"${o.phone || ""}"`,
-        `"${itemsStr}"`,
-        o.total,
-        o.paymentStatus,
-        o.orderStatus,
-      ]);
-    });
-    csvDownload(`sales-report-${month}.csv`, rows);
-  }
+  const rows = [
+    [
+      "Date",
+      "Customer",
+      "Phone",
+      "Products",
+      "Total",
+      "Payment Status",
+      "Order Status",
+    ],
+  ];
+
+  monthOrders.forEach((o) => {
+    const itemsStr = o.items
+      .map((it) => `${it.qty}${it.unit} ${it.productName}`)
+      .join(" + ");
+
+    rows.push([
+      o.orderDate,
+      o.customerName || "",
+      o.phone || "",
+      itemsStr,
+      o.total,
+      o.paymentStatus,
+      o.orderStatus,
+    ]);
+  });
+
+  csvDownload(`sales-report-${month}.csv`, rows);
+}
 
   function exportPendingCSV() {
-    const rows = [["Date", "Customer", "Phone", "Amount Due"]];
-    data.orders
-      .filter((o) => amountDue(o) > 0)
-      .forEach((o) => {
-        rows.push([
-          o.orderDate,
-          `"${o.customerName || ""}"`,
-          `"${o.phone || ""}"`,
-          amountDue(o),
-        ]);
-      });
-    csvDownload("pending-payments.csv", rows);
-  }
+  const rows = [["Date", "Customer", "Phone", "Amount Due"]];
+
+  data.orders
+    .filter((o) => Number(amountDue(o)) > 0)
+    .forEach((o) => {
+      rows.push([
+        o.orderDate,
+        o.customerName || "",
+        o.phone || "",
+        Number(amountDue(o)),
+      ]);
+    });
+
+  csvDownload("pending-payments.csv", rows);
+}
+
 
   function exportCustomerCSV() {
     const rows = [
@@ -1724,15 +2652,16 @@ function ReportsTab({ data }) {
       }
     });
     Object.values(map).forEach((c) => {
-      rows.push([
-        `"${c.name || ""}"`,
-        `"${c.phone || ""}"`,
-        `"${c.address || ""}"`,
-        c.totalOrders,
-        c.totalAmount,
-        c.pending,
-      ]);
-    });
+     rows.push([
+      c.name || "",
+      c.phone || "",
+      c.address || "",
+      c.totalOrders,
+      c.totalAmount,
+      c.pending,
+    ]);
+  });
+
     csvDownload("customer-report.csv", rows);
   }
 
