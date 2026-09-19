@@ -4,6 +4,8 @@ import signatureImg from "./assets/signature.png";
 import React, { useState, useEffect, useMemo } from "react";
 import html2pdf from "html2pdf.js";
 import qrImg from "./assets/payment-qr.png";
+// import { ThemeProvider, useTheme } from "./app/ThemeContext";
+
 import {
   Plus,
   Package,
@@ -1433,11 +1435,11 @@ export default function App() {
   ).length;
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: C.bg,
-        fontFamily: "'DM Sans',sans-serif",
+      <div
+        style={{
+          minHeight: "100vh",
+          background: C.bg,
+          fontFamily: "'DM Sans',sans-serif",
         color: C.ink,
         paddingBottom: 84,
       }}

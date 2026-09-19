@@ -21,6 +21,7 @@ import {
 import { TopBar } from "../../components/Shared";
 import { Geolocation } from "@capacitor/geolocation";
 import { useEffect, useState } from "react";
+// import { useTheme } from "../../app/ThemeContext";
 
 export default function Dashboard({
   data,

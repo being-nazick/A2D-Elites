@@ -1,20 +1,53 @@
-export const C = {
+// app/constants.js
+
+export const LIGHT = {
   bg: "#FBF7F0",
   paper: "#FFFFFF",
   paperLine: "#EAE1D0",
+
   ink: "#2A2320",
   inkMute: "#8A7F70",
+
   primary: "#1E4B42",
   primaryDark: "#123530",
   primarySoft: "#E4EEE9",
+
   gold: "#C08A28",
   goldSoft: "#F7ECD6",
+
   brick: "#B54A3B",
   brickSoft: "#F6E3DE",
+
   green: "#3E7A56",
   greenSoft: "#E3EFE6",
+
   cream: "#F1E9D8",
 };
+
+export const DARK = {
+  bg: "#151A18",
+  paper: "#1D2421",
+  paperLine: "#303934",
+
+  ink: "#F4F1E8",
+  inkMute: "#A8ADA6",
+
+  primary: "#4F9A87",
+  primaryDark: "#2F6659",
+  primarySoft: "#233C35",
+
+  gold: "#D9A441",
+  goldSoft: "#3A3020",
+
+  brick: "#D66A5B",
+  brickSoft: "#3A2522",
+
+  green: "#6EAF82",
+  greenSoft: "#24382B",
+
+  cream: "#E8DFC9",
+};
+
 
 export const FONTS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
@@ -41,3 +74,4 @@ export const EMPTY_DATA = { products: DEFAULT_PRODUCTS, customers: [], orders: [
 export const weekdayShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const CATEGORY_ICON = { Milk: "🥛", Paneer: "🧀", Curd: "🥣" };
 
+export const C = LIGHT;
