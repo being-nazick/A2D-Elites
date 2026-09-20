@@ -24,6 +24,8 @@ import {
   FileText,
 } from "lucide-react";
 import { Dialog } from "@capacitor/dialog";
+import { Filesystem, Directory, Encoding } from "@capacitor/filesystem";
+import { Share } from "@capacitor/share";
 import {
   LineChart,
   Line,
@@ -87,10 +89,21 @@ function generateRecurringForToday(data) {
     }
 
     // Check whether this recurring order should run today
-    const matches =
-      recurring.frequency === "daily" ||
-      (recurring.frequency === "weekly" &&
-        (recurring.daysOfWeek || []).includes(dayOfWeek));
+    let matches = false;
+    if (recurring.frequency === "daily") {
+      matches = true;
+    } else if (recurring.frequency === "weekly") {
+      matches = (recurring.daysOfWeek || []).includes(dayOfWeek);
+    } else if (recurring.frequency === "alternate") {
+      if (!recurring.lastGeneratedDate) {
+        matches = true;
+      } else {
+        const lastGen = new Date(recurring.lastGeneratedDate);
+        const todayDate = new Date(today);
+        const diffDays = Math.floor((todayDate - lastGen) / (1000 * 60 * 60 * 24));
+        matches = diffDays >= 2;
+      }
+    }
 
     if (!matches) return recurring;
 
@@ -144,9 +157,9 @@ function generateRecurringForToday(data) {
   };
 }
 
-function csvDownload(filename, rows) {
+async function csvDownload(filename, rows) {
   try {
-    const csv = rows
+    const csv = "\uFEFF" + rows
       .map((row) =>
         row
           .map((cell) => {
@@ -157,29 +170,44 @@ function csvDownload(filename, rows) {
       )
       .join("\r\n");
 
-    const blob = new Blob(["\uFEFF", csv], {
-      type: "text/csv;charset=utf-8",
-    });
+    const isNative = window.Capacitor?.isNativePlatform?.();
 
-    const url = URL.createObjectURL(blob);
+    if (isNative) {
+      // Native Android / iOS flow
+      const result = await Filesystem.writeFile({
+        path: filename,
+        data: csv,
+        directory: Directory.Cache,
+        encoding: Encoding.UTF8,
+      });
 
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    link.setAttribute("download", filename);
-    link.style.display = "none";
+      await Share.share({
+        title: filename,
+        url: result.uri,
+        dialogTitle: 'Save or Share CSV',
+      });
+    } else {
+      // Web fallback
+      const blob = new Blob([csv], {
+        type: "text/csv;charset=utf-8",
+      });
 
-    document.body.appendChild(link);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.setAttribute("download", filename);
+      link.style.display = "none";
 
-    // Give the browser/webview time to start the download.
-    requestAnimationFrame(() => {
-      link.click();
-
-      setTimeout(() => {
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      }, 1500);
-    });
+      document.body.appendChild(link);
+      requestAnimationFrame(() => {
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 1500);
+      });
+    }
   } catch (error) {
     console.error("CSV download failed:", error);
     alert("Unable to download the CSV file.");
@@ -2610,6 +2638,8 @@ function RecurringView({ data, onAdd, onEdit, onDelete, onBack }) {
                 <div style={{ fontSize: 11, color: C.inkMute, marginTop: 3 }}>
                   {r.frequency === "daily"
                     ? "Every day"
+                    : r.frequency === "alternate"
+                    ? "Alternate days"
                     : `Weekly: ${(r.daysOfWeek || []).map((d) => weekdayShort[d]).join(", ")}`}
                 </div>
               </div>
@@ -3670,7 +3700,7 @@ function RecurringModal({ initial, products, customers, onClose, onSave }) {
       address,
       items,
       frequency,
-      daysOfWeek: frequency === "daily" ? [0, 1, 2, 3, 4, 5, 6] : daysOfWeek,
+      daysOfWeek: (frequency === "daily" || frequency === "alternate") ? [0, 1, 2, 3, 4, 5, 6] : daysOfWeek,
       active,
     });
   }
@@ -3818,12 +3848,12 @@ function RecurringModal({ initial, products, customers, onClose, onSave }) {
 
       <Field label="Frequency">
         <div style={{ display: "flex", gap: 6 }}>
-          {["daily", "weekly"].map((f) => (
+          {["daily", "alternate", "weekly"].map((f) => (
             <Chip
               key={f}
               active={frequency === f}
               onClick={() => setFrequency(f)}
-              label={f === "daily" ? "Every day" : "Specific days"}
+              label={f === "daily" ? "Every day" : f === "alternate" ? "Alternate days" : "Specific days"}
             />
           ))}
         </div>
