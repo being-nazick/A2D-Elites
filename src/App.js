@@ -1,7 +1,8 @@
 import logoIcon from "./assets/logo.png";
 import React, { useState, useEffect, useMemo } from "react";
 // import { ThemeProvider, useTheme } from "./app/ThemeContext";
-import { generateBill } from "./invoiceService";
+import { generateBill } from "./features/invoiceService";
+import { getMonthlySummaries, generateMonthlyStatementPDF } from "./billing";
 import {
   Plus,
   Package,
@@ -20,6 +21,7 @@ import {
   Wallet,
   Navigation,
   Route,
+  FileText,
 } from "lucide-react";
 import { Dialog } from "@capacitor/dialog";
 import {
@@ -254,7 +256,11 @@ export default function App() {
 
     // Calculate actual milk quantity to ensure we only trigger the modal for genuine milk orders
     const actualMilkBottles = (order.items || [])
-      .filter((it) => it.category === "Milk")
+      .filter(
+        (it) =>
+          (it.category || "").toLowerCase() === "milk" ||
+          (it.productName || "").toLowerCase().includes("milk"),
+      )
       .reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
     if (actualMilkBottles > 0) {
@@ -266,35 +272,36 @@ export default function App() {
   }
 
   function confirmDelivery(orderId, bottlesReturned) {
-    let deliveredOrder = null;
-    setData((prev) => {
-      const order = prev.orders.find((o) => o.id === orderId);
-      if (!order) return prev;
+    const existingOrder = data.orders.find((o) => o.id === orderId);
+    if (!existingOrder) return;
 
-      // Calculate actual milk bottles from THIS order's items
-      const actualMilkBottles = (order.items || [])
-        .filter((it) => it.category === "Milk")
-        .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    const actualMilkBottles = (existingOrder.items || [])
+      .filter(
+        (it) =>
+          (it.category || "").toLowerCase() === "milk" ||
+          (it.productName || "").toLowerCase().includes("milk"),
+      )
+      .reduce((s, it) => s + (Number(it.qty) || 0), 0);
 
-      // Cap bottles returned to actual milk quantity
-      const validBottles = Math.min(
-        Number(bottlesReturned) || 0,
-        actualMilkBottles,
-      );
+    const numReturned =
+      typeof bottlesReturned === "number"
+        ? bottlesReturned
+        : Number(bottlesReturned) || 0;
+    const validBottles = Math.min(Math.max(0, numReturned), actualMilkBottles);
 
-      deliveredOrder = {
-        ...order,
-        orderStatus: "Delivered",
-        bottlesReturned: validBottles,
-      };
+    const deliveredOrder = {
+      ...existingOrder,
+      orderStatus: "Delivered",
+      bottlesReturned: validBottles,
+    };
 
-      return {
-        ...prev,
-        orders: prev.orders.map((o) => (o.id === orderId ? deliveredOrder : o)),
-      };
-    });
+    setData((prev) => ({
+      ...prev,
+      orders: prev.orders.map((o) => (o.id === orderId ? deliveredOrder : o)),
+    }));
+
     setReturnModalOrder(null);
-    openDeliveryWhatsApp(deliveredOrder, data.customers);
+    openDeliveryWhatsApp(deliveredOrder, data.orders, data.customers);
   }
 
   function markPaid(id) {
@@ -673,6 +680,688 @@ function ActionBtn({ onClick, icon: Icon, label, tone, toneSoft }) {
   );
 }
 
+/* ============================== CUSTOMER DETAIL ============================== */
+function CustomerDetail({
+  activeCustomer,
+  full,
+  data,
+  setActiveCustomer,
+  onNewOrderFor,
+  onEditCustomer,
+  onDeleteCustomer,
+  onEditOrder,
+}) {
+  const [viewTab, setViewTab] = useState("orders");
+  const [downloadingMonthKey, setDownloadingMonthKey] = useState(null);
+
+  const getOrderTotal = (order) => {
+    if (order.total !== undefined && order.total !== null) {
+      return Number(order.total) || 0;
+    }
+    return (order.items || []).reduce(
+      (sum, item) => sum + (Number(item.qty) || 0) * (Number(item.price) || 0),
+      0,
+    );
+  };
+
+  const custId = activeCustomer?.id || activeCustomer;
+  const custName = full?.name || activeCustomer?.name || "";
+
+  const orders = useMemo(
+    () =>
+      (data.orders || [])
+        .filter((o) => {
+          const matchId = Boolean(custId && String(o.customerId) === String(custId));
+          const matchName = Boolean(custName && o.customerName && String(o.customerName).toLowerCase().trim() === custName.toLowerCase().trim());
+          return matchId || matchName;
+        })
+        .sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0)),
+    [data.orders, custId, custName],
+  );
+
+  const monthlySummaries = useMemo(
+    () => getMonthlySummaries(custId, data.orders, custName),
+    [custId, data.orders, custName],
+  );
+
+  const ledgerOrders = useMemo(
+    () =>
+      orders
+        .filter((o) => o.orderStatus !== "Cancelled")
+        .slice()
+        .sort((a, b) => new Date(a.orderDate || 0) - new Date(b.orderDate || 0)),
+    [orders],
+  );
+
+  const { cumulativeBalanceMap, customerBalance } = useMemo(() => {
+    let runningBalance = 0;
+    const map = {};
+    ledgerOrders.forEach((o) => {
+      const total = getOrderTotal(o);
+      const paid = Number(o.amountPaid) || 0;
+      const due = Math.max(0, total - paid);
+      runningBalance += due;
+      map[o.id] = runningBalance;
+    });
+    return { cumulativeBalanceMap: map, customerBalance: runningBalance };
+  }, [ledgerOrders]);
+
+  async function handleDownloadPDF(monthSummary) {
+    try {
+      setDownloadingMonthKey(monthSummary.monthKey);
+      await generateMonthlyStatementPDF(full, monthSummary, data.orders);
+    } catch (err) {
+      console.error("Monthly statement generation error:", err);
+      alert("Failed to generate PDF statement.");
+    } finally {
+      setDownloadingMonthKey(null);
+    }
+  }
+
+  return (
+    <div>
+      {/* HEADER */}
+      <div
+        style={{
+          padding: "18px 16px 8px",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+        }}
+      >
+        <button
+          className="tap"
+          onClick={() => setActiveCustomer(null)}
+          style={navBtnStyle}
+        >
+          <ArrowLeft size={16} />
+        </button>
+
+        <div
+          style={{
+            fontFamily: "'Fraunces',serif",
+            fontSize: 20,
+            fontWeight: 600,
+          }}
+        >
+          {full.name}
+        </div>
+      </div>
+
+      <div style={{ padding: "0 16px" }}>
+        {/* PHONE */}
+        {full.phone && (
+          <div
+            style={{
+              fontSize: 13,
+              color: C.inkMute,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              marginTop: 2,
+            }}
+          >
+            <Phone size={13} />
+            {full.phone}
+          </div>
+        )}
+
+        {/* ADDRESS */}
+        {full.address && (
+          <div
+            style={{
+              fontSize: 13,
+              color: C.inkMute,
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              marginTop: 2,
+            }}
+          >
+            <MapPin size={13} />
+            {full.address}
+          </div>
+        )}
+
+        {/* NAVIGATION */}
+        {hasCoordinates(full) && (
+          <a
+            href={`https://www.google.com/maps/dir/?api=1&destination=${full.latitude},${full.longitude}`}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 5,
+              marginTop: 6,
+              color: C.primary,
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            <Navigation size={13} />
+            Navigate to customer
+          </a>
+        )}
+
+        {/* CUSTOMER STATS */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 10,
+            marginTop: 14,
+          }}
+        >
+          <MiniStat label="Total Orders" value={full.totalOrders} />
+
+          <MiniStat
+            label="Total Purchased"
+            value={fmtINR(full.totalAmount)}
+          />
+
+          <MiniStat
+            label="Pending Payment"
+            value={fmtINR(customerBalance)}
+            tone={customerBalance > 0 ? C.brick : C.ink}
+          />
+
+          <MiniStat
+            label="Bottles Owed"
+            value={full.bottlesOwed || 0}
+            tone={full.bottlesOwed > 0 ? C.gold : C.ink}
+          />
+
+          <MiniStat
+            label="Last Order"
+            value={full.lastOrder ? fmtDateShort(full.lastOrder) : "—"}
+          />
+        </div>
+
+        {/* ACTION BUTTONS */}
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginTop: 14,
+          }}
+        >
+          <button
+            className="tap"
+            onClick={() => onNewOrderFor(full)}
+            style={{
+              flex: 1,
+              background: C.primary,
+              color: "#fff",
+              border: "none",
+              borderRadius: 12,
+              padding: "11px",
+              fontWeight: 700,
+              fontSize: 13,
+            }}
+          >
+            + New Order
+          </button>
+
+          <button
+            className="tap"
+            onClick={() => onEditCustomer(full)}
+            style={{
+              background: C.cream,
+              border: "none",
+              borderRadius: 12,
+              padding: "11px 14px",
+              fontWeight: 700,
+              fontSize: 13,
+            }}
+          >
+            <Edit2 size={14} />
+          </button>
+
+          <button
+            className="tap"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Are you sure you want to delete this customer? Their past orders will remain in history.",
+                )
+              ) {
+                onDeleteCustomer(full.id);
+                setActiveCustomer(null);
+              }
+            }}
+            style={{
+              background: C.brickSoft,
+              color: C.brick,
+              border: "none",
+              borderRadius: 12,
+              padding: "11px 14px",
+              fontWeight: 700,
+              fontSize: 13,
+            }}
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+
+        {/* SECTION TOGGLE: ORDER HISTORY VS BILLING HISTORY */}
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginTop: 20,
+            marginBottom: 12,
+          }}
+        >
+          <button
+            className="tap"
+            onClick={() => setViewTab("orders")}
+            style={{
+              flex: 1,
+              padding: "9px 12px",
+              borderRadius: 10,
+              border: `1px solid ${viewTab === "orders" ? C.primary : C.paperLine}`,
+              background: viewTab === "orders" ? C.primarySoft : C.paper,
+              color: viewTab === "orders" ? C.primaryDark : C.inkMute,
+              fontWeight: 700,
+              fontSize: 12.5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            <Clock size={14} /> Order History ({orders.length})
+          </button>
+
+          <button
+            className="tap"
+            onClick={() => setViewTab("billing")}
+            style={{
+              flex: 1,
+              padding: "9px 12px",
+              borderRadius: 10,
+              border: `1px solid ${viewTab === "billing" ? C.primary : C.paperLine}`,
+              background: viewTab === "billing" ? C.primarySoft : C.paper,
+              color: viewTab === "billing" ? C.primaryDark : C.inkMute,
+              fontWeight: 700,
+              fontSize: 12.5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+            }}
+          >
+            <FileText size={14} /> Billing History ({monthlySummaries.length})
+          </button>
+        </div>
+      </div>
+
+      {/* VIEW CONTENTS */}
+      {viewTab === "orders" ? (
+        <div
+          style={{
+            padding: "0 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          }}
+        >
+          {orders.length === 0 && (
+            <div style={{ color: C.inkMute, fontSize: 13 }}>
+              No orders yet.
+            </div>
+          )}
+
+          {orders.map((o) => {
+            const isCancelled = o.orderStatus === "Cancelled";
+            const orderTotalVal = getOrderTotal(o);
+            const amountPaid = Number(o.amountPaid) || 0;
+            const orderDue = Math.max(0, orderTotalVal - amountPaid);
+            const cumBal = cumulativeBalanceMap[o.id];
+
+            return (
+              <div
+                key={o.id}
+                className="tap"
+                onClick={() => onEditOrder(o)}
+                style={{
+                  background: C.paper,
+                  border: `1px solid ${C.paperLine}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: C.inkMute,
+                      fontFamily: "'JetBrains Mono',monospace",
+                    }}
+                  >
+                    {fmtDateShort(o.orderDate)}
+                  </div>
+
+                  <QtyLine items={o.items} />
+
+                  {!isCancelled && orderDue > 0 && (
+                    <div
+                      style={{
+                        marginTop: 3,
+                        fontSize: 10,
+                        color: C.brick,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {fmtINR(orderDue)} due
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ textAlign: "right" }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontFamily: "'JetBrains Mono',monospace",
+                    }}
+                  >
+                    {fmtINR(orderTotalVal)}
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "flex-end",
+                      gap: 6,
+                      marginTop: 3,
+                    }}
+                  >
+                    {!isCancelled && cumBal !== undefined && (
+                      <span
+                        style={{
+                          fontSize: 9,
+                          fontWeight: 700,
+                          padding: "2px 5px",
+                          borderRadius: 4,
+                          background:
+                            cumBal > 0 ? C.brickSoft || "#ffebee" : "#f1f3f5",
+                          color: cumBal > 0 ? C.brick || "#c62828" : "#6c757d",
+                          fontFamily: "'JetBrains Mono',monospace",
+                        }}
+                      >
+                        Cum. Bal: {fmtINR(cumBal)}
+                      </span>
+                    )}
+
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (o.orderStatus === "Delivered") {
+                          openDeliveryWhatsApp(o, data.orders, data.customers);
+                        }
+                      }}
+                      style={{
+                        cursor:
+                          o.orderStatus === "Delivered" ? "pointer" : "default",
+                      }}
+                      title={
+                        o.orderStatus === "Delivered"
+                          ? "Open delivery WhatsApp"
+                          : undefined
+                      }
+                    >
+                      {o.orderStatus === "Delivered" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openDeliveryWhatsApp(o, data.orders, data.customers);
+                          }}
+                          style={{
+                            border: "none",
+                            padding: 0,
+                            margin: 0,
+                            background: "transparent",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <StatusPill status="Delivered" kind="order" />
+                        </button>
+                      ) : (
+                        <StatusPill status={o.orderStatus} kind="order" />
+                      )}
+                    </div>
+                  </div>
+
+                  {!isCancelled && (
+                    <div
+                      style={{
+                        marginTop: 3,
+                        fontSize: 9.5,
+                        color: orderDue > 0 ? C.brick : C.green,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {orderDue > 0 ? `${fmtINR(orderDue)} due` : "Paid"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* BILLING HISTORY LIST */
+        <div
+          style={{
+            padding: "0 16px",
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          }}
+        >
+          {monthlySummaries.length === 0 ? (
+            <div style={{ color: C.inkMute, fontSize: 13 }}>
+              No billing history available for this customer.
+            </div>
+          ) : (
+            monthlySummaries.map((ms) => {
+              const [y, m] = ms.monthKey.split("-").map(Number);
+              const monthName = new Date(y, m - 1, 1).toLocaleString("default", {
+                month: "long",
+                year: "numeric",
+              });
+              const bottlesBalance = Math.max(
+                0,
+                ms.totalBottlesSent - ms.totalBottlesReturned,
+              );
+              const isDownloading = downloadingMonthKey === ms.monthKey;
+
+              return (
+                <div
+                  key={ms.monthKey}
+                  style={{
+                    background: C.paper,
+                    border: `1px solid ${C.paperLine}`,
+                    borderRadius: 14,
+                    padding: "14px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontWeight: 800,
+                          fontSize: 15,
+                          color: C.primaryDark,
+                        }}
+                      >
+                        {monthName}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: C.inkMute,
+                          marginTop: 2,
+                        }}
+                      >
+                        {ms.orders.length} order{ms.orders.length !== 1 ? "s" : ""}
+                      </div>
+                    </div>
+
+                    <button
+                      className="tap"
+                      onClick={() => handleDownloadPDF(ms)}
+                      disabled={isDownloading}
+                      style={{
+                        background: C.primarySoft,
+                        color: C.primaryDark,
+                        border: `1px solid ${C.primary}`,
+                        borderRadius: 10,
+                        padding: "7px 12px",
+                        fontSize: 12,
+                        fontWeight: 700,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 5,
+                        opacity: isDownloading ? 0.6 : 1,
+                      }}
+                    >
+                      <Download size={13} />
+                      {isDownloading ? "Generating..." : "Statement PDF"}
+                    </button>
+                  </div>
+
+                  {/* SUMMARY CARDS GRID */}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr 1fr 1fr",
+                      gap: 6,
+                      background: C.bg || "#f8f9fa",
+                      padding: "10px 8px",
+                      borderRadius: 10,
+                      border: `1px solid ${C.paperLine}`,
+                    }}
+                  >
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 9,
+                          color: C.inkMute,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Sales
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: C.ink,
+                          marginTop: 2,
+                        }}
+                      >
+                        {fmtINR(ms.totalSales)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 9,
+                          color: C.green,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Paid
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: C.green,
+                          marginTop: 2,
+                        }}
+                      >
+                        {fmtINR(ms.totalPaid)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 9,
+                          color: ms.totalPending > 0 ? C.brick : C.inkMute,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Pending
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: ms.totalPending > 0 ? C.brick : C.ink,
+                          marginTop: 2,
+                        }}
+                      >
+                        {fmtINR(ms.totalPending)}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div
+                        style={{
+                          fontSize: 9,
+                          color: bottlesBalance > 0 ? C.gold : C.inkMute,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        Bottles
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: bottlesBalance > 0 ? C.gold : C.ink,
+                          marginTop: 2,
+                        }}
+                      >
+                        {bottlesBalance}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      <div style={{ height: 16 }} />
+    </div>
+  );
+}
+
 /* ============================== CUSTOMERS TAB ============================== */
 function CustomersTab({
   data,
@@ -749,473 +1438,17 @@ function CustomersTab({
       bottlesOwed: 0,
     };
 
-    // ---------------------------------------------------------
-    // SAFE ORDER TOTAL
-    // ---------------------------------------------------------
-    const getOrderTotal = (order) => {
-      if (order.total !== undefined && order.total !== null) {
-        return Number(order.total) || 0;
-      }
-
-      return (order.items || []).reduce(
-        (sum, item) =>
-          sum + (Number(item.qty) || 0) * (Number(item.price) || 0),
-        0,
-      );
-    };
-
-    // ---------------------------------------------------------
-    // ALL CUSTOMER ORDERS - NEWEST FIRST
-    // ---------------------------------------------------------
-    const orders = (data.orders || [])
-      .filter((o) => o.customerId === activeCustomer.id)
-      .sort((a, b) => new Date(b.orderDate || 0) - new Date(a.orderDate || 0));
-
-    // ---------------------------------------------------------
-    // LEDGER ORDERS - OLDEST FIRST
-    // Used only for cumulative balance calculation
-    // ---------------------------------------------------------
-    const ledgerOrders = orders
-      .filter((o) => o.orderStatus !== "Cancelled")
-      .slice()
-      .sort((a, b) => new Date(a.orderDate || 0) - new Date(b.orderDate || 0));
-
-    // ---------------------------------------------------------
-    // CUMULATIVE CUSTOMER BALANCE
-    // ---------------------------------------------------------
-    let runningBalance = 0;
-    const cumulativeBalanceMap = {};
-
-    ledgerOrders.forEach((o) => {
-      const total = getOrderTotal(o);
-      const paid = Number(o.amountPaid) || 0;
-
-      const due = Math.max(0, total - paid);
-
-      runningBalance += due;
-
-      cumulativeBalanceMap[o.id] = runningBalance;
-    });
-
-    // ---------------------------------------------------------
-    // CURRENT CUSTOMER OUTSTANDING BALANCE
-    // ---------------------------------------------------------
-    const customerBalance = ledgerOrders.reduce((sum, o) => {
-      const total = getOrderTotal(o);
-      const paid = Number(o.amountPaid) || 0;
-
-      return sum + Math.max(0, total - paid);
-    }, 0);
-
     return (
-      <div>
-        {/* =====================================================
-          HEADER
-      ====================================================== */}
-        <div
-          style={{
-            padding: "18px 16px 8px",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <button
-            className="tap"
-            onClick={() => setActiveCustomer(null)}
-            style={navBtnStyle}
-          >
-            <ArrowLeft size={16} />
-          </button>
-
-          <div
-            style={{
-              fontFamily: "'Fraunces',serif",
-              fontSize: 20,
-              fontWeight: 600,
-            }}
-          >
-            {full.name}
-          </div>
-        </div>
-
-        <div style={{ padding: "0 16px" }}>
-          {/* =================================================
-            PHONE
-        ================================================== */}
-          {full.phone && (
-            <div
-              style={{
-                fontSize: 13,
-                color: C.inkMute,
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                marginTop: 2,
-              }}
-            >
-              <Phone size={13} />
-              {full.phone}
-            </div>
-          )}
-
-          {/* =================================================
-            ADDRESS
-        ================================================== */}
-          {full.address && (
-            <div
-              style={{
-                fontSize: 13,
-                color: C.inkMute,
-                display: "flex",
-                alignItems: "center",
-                gap: 5,
-                marginTop: 2,
-              }}
-            >
-              <MapPin size={13} />
-              {full.address}
-            </div>
-          )}
-
-          {/* =================================================
-            NAVIGATION
-        ================================================== */}
-          {hasCoordinates(full) && (
-            <a
-              href={`https://www.google.com/maps/dir/?api=1&destination=${full.latitude},${full.longitude}`}
-              target="_blank"
-              rel="noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 5,
-                marginTop: 6,
-                color: C.primary,
-                fontSize: 12,
-                fontWeight: 700,
-              }}
-            >
-              <Navigation size={13} />
-              Navigate to customer
-            </a>
-          )}
-
-          {/* =================================================
-            CUSTOMER STATS
-        ================================================== */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-              marginTop: 14,
-            }}
-          >
-            <MiniStat label="Total Orders" value={full.totalOrders} />
-
-            <MiniStat
-              label="Total Purchased"
-              value={fmtINR(full.totalAmount)}
-            />
-
-            <MiniStat
-              label="Pending Payment"
-              value={fmtINR(customerBalance)}
-              tone={customerBalance > 0 ? C.brick : C.ink}
-            />
-
-            <MiniStat
-              label="Bottles Owed"
-              value={full.bottlesOwed || 0}
-              tone={full.bottlesOwed > 0 ? C.gold : C.ink}
-            />
-
-            <MiniStat
-              label="Last Order"
-              value={full.lastOrder ? fmtDateShort(full.lastOrder) : "—"}
-            />
-          </div>
-
-          {/* =================================================
-            ACTION BUTTONS
-        ================================================== */}
-          <div
-            style={{
-              display: "flex",
-              gap: 8,
-              marginTop: 14,
-            }}
-          >
-            <button
-              className="tap"
-              onClick={() => onNewOrderFor(full)}
-              style={{
-                flex: 1,
-                background: C.primary,
-                color: "#fff",
-                border: "none",
-                borderRadius: 12,
-                padding: "11px",
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              + New Order
-            </button>
-
-            <button
-              className="tap"
-              onClick={() => onEditCustomer(full)}
-              style={{
-                background: C.cream,
-                border: "none",
-                borderRadius: 12,
-                padding: "11px 14px",
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              <Edit2 size={14} />
-            </button>
-
-            <button
-              className="tap"
-              onClick={() => {
-                if (
-                  window.confirm(
-                    "Are you sure you want to delete this customer? Their past orders will remain in history.",
-                  )
-                ) {
-                  onDeleteCustomer(full.id);
-                  setActiveCustomer(null);
-                }
-              }}
-              style={{
-                background: C.brickSoft,
-                color: C.brick,
-                border: "none",
-                borderRadius: 12,
-                padding: "11px 14px",
-                fontWeight: 700,
-                fontSize: 13,
-              }}
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-
-          {/* =================================================
-            ORDER HISTORY
-        ================================================== */}
-          <div
-            style={{
-              fontWeight: 700,
-              fontSize: 14,
-              marginTop: 20,
-              marginBottom: 8,
-            }}
-          >
-            Order History
-          </div>
-        </div>
-
-        {/* =====================================================
-          ORDERS
-      ====================================================== */}
-        <div
-          style={{
-            padding: "0 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: 8,
-          }}
-        >
-          {orders.length === 0 && (
-            <div
-              style={{
-                color: C.inkMute,
-                fontSize: 13,
-              }}
-            >
-              No orders yet.
-            </div>
-          )}
-
-          {orders.map((o) => {
-            const isCancelled = o.orderStatus === "Cancelled";
-
-            const orderTotal = getOrderTotal(o);
-
-            const amountPaid = Number(o.amountPaid) || 0;
-
-            const orderDue = Math.max(0, orderTotal - amountPaid);
-
-            const cumBal = cumulativeBalanceMap[o.id];
-
-            return (
-              <div
-                key={o.id}
-                className="tap"
-                onClick={() => onEditOrder(o)}
-                style={{
-                  background: C.paper,
-                  border: `1px solid ${C.paperLine}`,
-                  borderRadius: 12,
-                  padding: "10px 12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                {/* =========================================
-                  LEFT
-              ========================================== */}
-                <div>
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: C.inkMute,
-                      fontFamily: "'JetBrains Mono',monospace",
-                    }}
-                  >
-                    {fmtDateShort(o.orderDate)}
-                  </div>
-
-                  <QtyLine items={o.items} />
-
-                  {!isCancelled && orderDue > 0 && (
-                    <div
-                      style={{
-                        marginTop: 3,
-                        fontSize: 10,
-                        color: C.brick,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {fmtINR(orderDue)} due
-                    </div>
-                  )}
-                </div>
-
-                {/* =========================================
-                  RIGHT
-              ========================================== */}
-                <div
-                  style={{
-                    textAlign: "right",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      fontFamily: "'JetBrains Mono',monospace",
-                    }}
-                  >
-                    {fmtINR(orderTotal)}
-                  </div>
-
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "flex-end",
-                      gap: 6,
-                      marginTop: 3,
-                    }}
-                  >
-                    {/* =====================================
-                      CUMULATIVE BALANCE
-                  ====================================== */}
-                    {!isCancelled && cumBal !== undefined && (
-                      <span
-                        style={{
-                          fontSize: 9,
-                          fontWeight: 700,
-                          padding: "2px 5px",
-                          borderRadius: 4,
-                          background:
-                            cumBal > 0 ? C.brickSoft || "#ffebee" : "#f1f3f5",
-                          color: cumBal > 0 ? C.brick || "#c62828" : "#6c757d",
-                          fontFamily: "'JetBrains Mono',monospace",
-                          cursor:
-                            o.orderStatus === "Delivered"
-                              ? "pointer"
-                              : "default",
-                        }}
-                      >
-                        Cum. Bal: {fmtINR(cumBal)}
-                      </span>
-                    )}
-
-                    {/* =====================================
-                      DELIVERY STATUS
-                      CLICKING DELIVERED OPENS WHATSAPP
-                  ====================================== */}
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-
-                        if (o.orderStatus === "Delivered") {
-                          openDeliveryWhatsApp(o, data.customers);
-                        }
-                      }}
-                      style={{
-                        cursor:
-                          o.orderStatus === "Delivered" ? "pointer" : "default",
-                      }}
-                      title={
-                        o.orderStatus === "Delivered"
-                          ? "Open delivery WhatsApp"
-                          : undefined
-                      }
-                    >
-                      {o.orderStatus === "Delivered" ? (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openDeliveryWhatsApp(o, data.customers);
-                          }}
-                          style={{
-                            border: "none",
-                            padding: 0,
-                            margin: 0,
-                            background: "transparent",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <StatusPill status="Delivered" kind="order" />
-                        </button>
-                      ) : (
-                        <StatusPill status={o.orderStatus} kind="order" />
-                      )}
-                    </div>
-                  </div>
-
-                  {/* =====================================
-                    PAYMENT STATUS
-                ====================================== */}
-                  {!isCancelled && (
-                    <div
-                      style={{
-                        marginTop: 3,
-                        fontSize: 9.5,
-                        color: orderDue > 0 ? C.brick : C.green,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {orderDue > 0 ? `${fmtINR(orderDue)} due` : "Paid"}
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div style={{ height: 16 }} />
-      </div>
+      <CustomerDetail
+        activeCustomer={activeCustomer}
+        full={full}
+        data={data}
+        setActiveCustomer={setActiveCustomer}
+        onNewOrderFor={onNewOrderFor}
+        onEditCustomer={onEditCustomer}
+        onDeleteCustomer={onDeleteCustomer}
+        onEditOrder={onEditOrder}
+      />
     );
   }
 

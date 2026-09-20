@@ -33,7 +33,12 @@ export const addDays = (iso, days) => {
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
-export const monthKey = (iso) => iso.slice(0, 7);
+export const monthKey = (iso) => {
+  if (!iso) return new Date().toISOString().slice(0, 7);
+  const str = String(iso).trim();
+  if (str.length >= 7) return str.slice(0, 7);
+  return new Date().toISOString().slice(0, 7);
+};
 export const iconFor = (category) =>
   ({ Milk: "🥛", Paneer: "🧀", Curd: "🥣" })[category] || "🏷️";
 
@@ -87,22 +92,29 @@ export function openCustomerNavigation(customer) {
   if (!win) window.location.href = url;
 }
 
-export function openDeliveryWhatsApp(order, allOrders = []) {
+export function openDeliveryWhatsApp(order, allOrders = [], customers = []) {
   if (!order) return;
-  const digits = String(order.phone || "").replace(/\D/g, "");
-  if (!digits) return;
+  const cust = (customers || []).find(
+    (c) => String(c.id) === String(order.customerId),
+  );
+  const rawPhone = order.phone || cust?.phone || "";
+  const digits = String(rawPhone).replace(/\D/g, "");
+  if (!digits) {
+    alert("Customer phone number is missing.");
+    return;
+  }
   const cleanDigits = digits.replace(/^0+/, "");
   const phone = cleanDigits.length === 10 ? `91${cleanDigits}` : cleanDigits;
   const items = (order.items || [])
-    .map((item) => `${item.qty} × ${item.productName}`)
+    .map((item) => `${item.qty} × ${item.productName || item.name || "Item"}`)
     .join(", ");
 
   // Total pending from OTHER unpaid orders (exclude this one to avoid double-count)
   const pendingFromOthers = (allOrders || [])
     .filter(
       (o) =>
-        o.id !== order.id &&
-        o.customerId === order.customerId &&
+        String(o.id) !== String(order.id) &&
+        String(o.customerId) === String(order.customerId) &&
         o.orderStatus !== "Cancelled" &&
         o.paymentStatus !== "Paid",
     )
@@ -112,13 +124,17 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   const bottlesFromOthers = (allOrders || [])
     .filter(
       (o) =>
-        o.id !== order.id &&
-        o.customerId === order.customerId &&
+        String(o.id) !== String(order.id) &&
+        String(o.customerId) === String(order.customerId) &&
         o.orderStatus !== "Cancelled",
     )
     .reduce((sum, o) => {
       const delivered = (o.items || [])
-        .filter((it) => it.category === "Milk")
+        .filter(
+          (it) =>
+            (it.category || "").toLowerCase() === "milk" ||
+            (it.productName || "").toLowerCase().includes("milk"),
+        )
         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
       const returned = Number(o.bottlesReturned) || 0;
       return sum + delivered - returned;
@@ -126,7 +142,11 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
 
   // Current order's bottle balance
   const currentDelivered = (order.items || [])
-    .filter((it) => it.category === "Milk")
+    .filter(
+      (it) =>
+        (it.category || "").toLowerCase() === "milk" ||
+        (it.productName || "").toLowerCase().includes("milk"),
+    )
     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
   const currentReturned = Number(order.bottlesReturned) || 0;
   const currentBottleNet = currentDelivered - currentReturned;
@@ -139,7 +159,7 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
   const payStatus =
     order.paymentStatus === "Paid"
       ? "Paid ✅"
-      : `${order.paymentStatus} (Due: ${fmtINR(amountDue(order))})`;
+      : `${order.paymentStatus || "Pending"} (Due: ${fmtINR(amountDue(order))})`;
 
   // Optional extras
   const pendingLine =
@@ -154,7 +174,7 @@ export function openDeliveryWhatsApp(order, allOrders = []) {
     totalBottlesOwed > 0 ? `\n🍼 Bottles to Return: ${totalBottlesOwed}` : "";
 
   const message =
-    `Hi ${order.customerName}, your order has been delivered! 🥛\n\n` +
+    `Hi ${order.customerName || cust?.name || "Customer"}, your order has been delivered! 🥛\n\n` +
     `Items: ${items || "Dairy products"}\n` +
     `Total: ${fmtINR(order.total)}\n` +
     `Payment: ${payStatus}` +

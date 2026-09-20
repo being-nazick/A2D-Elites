@@ -1,7 +1,7 @@
-import logo1 from "./assets/logo1.png";
-import signatureImg from "./assets/signature.png";
+import logo1 from "../assets/logo1.png";
+import signatureImg from "../assets/signature.png";
 import html2pdf from "html2pdf.js";
-import qrImg from "./assets/payment-qr.png";
+import qrImg from "../assets/payment-qr.png";
 // import { ThemeProvider, useTheme } from "./app/ThemeContext";
 
 import { Directory, Filesystem } from "@capacitor/filesystem";
@@ -16,12 +16,12 @@ import {
   BUSINESS_EMAIL,
   UPI_ID,
   UPI_PAYEE_NAME,
-} from "./app/constants";
+} from "../app/constants";
 import {
   todayStr,
   fmtINR,
   fmtDate,
-} from "./app/helpers";
+} from "../app/helpers";
 /* ============================== PDF / BILL GENERATION ============================== */
 
 /* -------------------------------------------------------------------------- */
