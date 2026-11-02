@@ -2,6 +2,7 @@ import { BUSINESS_NAME } from "./constants";
 
 export const uid = (prefix = "id") =>
   prefix + "_" + Math.random().toString(36).slice(2, 10);
+
 export const todayStr = () => {
   const date = new Date();
   const yyyy = date.getFullYear();
@@ -9,8 +10,26 @@ export const todayStr = () => {
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
+
 export const fmtINR = (value) =>
   "₹" + Math.round(value || 0).toLocaleString("en-IN");
+
+/**
+ * Formats a balance amount with explicit signs:
+ * - If balance > 0 (advance / credit): explicit '+' sign (e.g. "+₹50")
+ * - If balance <= 0 (due / outstanding / zero): explicit '-' sign (e.g. "-₹20", "-₹0")
+ */
+export function fmtBalance(balance, currency = "₹") {
+  const num = Math.round(Number(balance) || 0);
+  if (num > 0) {
+    return `+${currency}${num.toLocaleString("en-IN")}`;
+  } else if (num < 0) {
+    return `-${currency}${Math.abs(num).toLocaleString("en-IN")}`;
+  } else {
+    return `-${currency}0`;
+  }
+}
+
 export const fmtDate = (iso) => {
   if (!iso) return "";
   return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
@@ -19,13 +38,15 @@ export const fmtDate = (iso) => {
     year: "numeric",
   });
 };
+
 export const fmtDateShort = (iso) =>
   new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
     day: "numeric",
     month: "short",
   });
+
 export const addDays = (iso, days) => {
-  const [year, month, day] = iso.split("-").map(Number); // Treat YYYY-MM-DD as a local calendar date. // Do NOT use toISOString() here because it converts to UTC // and can shift the date by one day in India/other timezones.
+  const [year, month, day] = iso.split("-").map(Number); // Treat YYYY-MM-DD as a local calendar date.
   const date = new Date(year, month - 1, day);
   date.setDate(date.getDate() + Number(days));
   const yyyy = date.getFullYear();
@@ -33,34 +54,84 @@ export const addDays = (iso, days) => {
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 };
+
 export const monthKey = (iso) => {
   if (!iso) return new Date().toISOString().slice(0, 7);
   const str = String(iso).trim();
   if (str.length >= 7) return str.slice(0, 7);
   return new Date().toISOString().slice(0, 7);
 };
+
 export const iconFor = (category) =>
   ({ Milk: "🥛", Paneer: "🧀", Curd: "🥣" })[category] || "🏷️";
 
 export function orderTotal(items) {
-  const total = items.reduce(
+  const total = (items || []).reduce(
     (sum, item) => sum + (Number(item.qty) || 0) * (Number(item.price) || 0),
     0,
   );
   return Math.round((total + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Resolves the actual amount paid for an order.
+ * Priority: customAmount → paymentStatus=Paid (full total) → amountPaid → 0
+ */
+export function resolvedPaid(order) {
+  if (!order) return 0;
+  if (order.customAmount !== undefined && order.customAmount !== null)
+    return Number(order.customAmount) || 0;
+  if (order.paymentStatus === "Paid") return Number(order.total) || 0;
+  return Number(order.amountPaid) || 0;
+}
+
 export function amountDue(order) {
   if (!order || typeof order.total !== "number" || Number.isNaN(order.total))
     return 0;
   const paid =
-    order.paymentStatus === "Paid"
-      ? order.total
-      : Number(order.amountPaid) || 0;
+    order.customAmount !== undefined && order.customAmount !== null
+      ? Number(order.customAmount)
+      : order.paymentStatus === "Paid"
+        ? order.total
+        : Number(order.amountPaid) || 0;
   return Math.max(
     0,
     Math.round((order.total - paid + Number.EPSILON) * 100) / 100,
   );
+}
+
+/**
+ * Computes customer's net balance: Total Paid - Total Purchased across all non-cancelled orders.
+ * Positive = Advance/Credit (+₹X)
+ * Zero / Negative = Due/Outstanding (-₹X)
+ */
+export function computeCustomerBalance(customer, allOrders = []) {
+  const custId = customer?.id ? String(customer.id) : (typeof customer === "string" ? String(customer) : "");
+  const custName = customer?.name ? String(customer.name).toLowerCase().trim() : "";
+
+  const customerOrders = (allOrders || []).filter((o) => {
+    if (o.orderStatus === "Cancelled") return false;
+    const matchId = Boolean(custId && String(o.customerId) === custId);
+    const matchName = Boolean(custName && o.customerName && String(o.customerName).toLowerCase().trim() === custName);
+    return matchId || matchName;
+  });
+
+  const totalPaid = customerOrders.reduce((sum, o) => {
+    const paid =
+      o.customAmount !== undefined && o.customAmount !== null
+        ? Number(o.customAmount)
+        : o.paymentStatus === "Paid"
+          ? Number(o.total)
+          : Number(o.amountPaid) || 0;
+    return sum + (Number(paid) || 0);
+  }, 0);
+
+  const totalPurchased = customerOrders.reduce(
+    (sum, o) => sum + (Number(o.total) || 0),
+    0,
+  );
+
+  return totalPaid - totalPurchased;
 }
 
 export const hasCoordinates = (place) =>
@@ -155,6 +226,11 @@ export function openDeliveryWhatsApp(order, allOrders = [], customers = []) {
   const totalCustomerPending = pendingFromOthers + amountDue(order);
   const totalBottlesOwed = Math.max(0, bottlesFromOthers + currentBottleNet);
 
+  // Delivery details
+  const deliveredByLine = order.deliveredBy
+    ? `\n🚚 Delivered By: ${order.deliveredBy}`
+    : "";
+
   // Payment line
   const payStatus =
     order.paymentStatus === "Paid"
@@ -162,6 +238,11 @@ export function openDeliveryWhatsApp(order, allOrders = [], customers = []) {
       : `${order.paymentStatus || "Pending"} (Due: ${fmtINR(amountDue(order))})`;
 
   // Optional extras
+  const customAmountLine =
+    order.customAmount !== undefined && order.customAmount !== null
+      ? `\n💵 Amount Paid: ${fmtINR(order.customAmount)}`
+      : "";
+
   const pendingLine =
     totalCustomerPending > 0 && order.paymentStatus !== "Paid"
       ? `\n\n💰 Total Pending: ${fmtINR(totalCustomerPending)}`
@@ -178,6 +259,8 @@ export function openDeliveryWhatsApp(order, allOrders = [], customers = []) {
     `Items: ${items || "Dairy products"}\n` +
     `Total: ${fmtINR(order.total)}\n` +
     `Payment: ${payStatus}` +
+    `${deliveredByLine}` +
+    `${customAmountLine}` +
     `${pendingLine}` +
     `${returnedLine}` +
     `${bottlesLine}\n\n` +

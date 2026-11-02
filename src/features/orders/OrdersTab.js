@@ -13,18 +13,29 @@ export default function OrdersTab({
   onMarkDelivered,
   onMarkPaid,
   OrderRow,
+  userSession,
 }) {
+  const isDelivery = userSession?.role === "delivery";
   const [query, setQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterPay, setFilterPay] = useState("All");
   const [filterProduct, setFilterProduct] = useState("All");
-  const [range, setRange] = useState("all");
+  const [range, setRange] = useState(isDelivery ? "today" : "all");
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
 
   const filtered = useMemo(() => {
     let list = [...data.orders].sort((a, b) =>
       (b.orderDate + b.createdAt).localeCompare(a.orderDate + a.createdAt),
     );
+
+    // Filter by delivery boy if assigned
+    if (isDelivery && userSession?.deliveryBoyId) {
+      const assigned = list.filter((o) => o.deliveryBoyId === userSession.deliveryBoyId);
+      // If there are specific assigned orders, filter to them; otherwise show all today's orders for testing
+      if (assigned.length > 0) {
+        list = assigned;
+      }
+    }
 
     const today = todayStr();
 
@@ -67,7 +78,7 @@ export default function OrdersTab({
     }
 
     return list;
-  }, [data.orders, query, filterStatus, filterPay, filterProduct, range]);
+  }, [data.orders, query, filterStatus, filterPay, filterProduct, range, isDelivery, userSession]);
 
   // -----------------------------
   // Bulk selection
@@ -119,28 +130,30 @@ export default function OrdersTab({
   return (
     <div style={{ paddingBottom: 80 }}>
       <TopBar
-        title="Orders"
-        subtitle={`${filtered.length} order${filtered.length !== 1 ? "s" : ""}`}
+        title={isDelivery ? "Deliveries" : "Orders"}
+        subtitle={`${filtered.length} ${isDelivery ? "delivery" : "order"}${filtered.length !== 1 ? "s" : ""}`}
         right={
-          <button
-            className="tap"
-            onClick={onAdd}
-            style={{
-              background: C.primary,
-              color: "#fff",
-              border: "none",
-              borderRadius: 12,
-              padding: "9px 13px",
-              display: "flex",
-              alignItems: "center",
-              gap: 5,
-              fontWeight: 700,
-              fontSize: 12.5,
-            }}
-          >
-            <Plus size={15} />
-            New
-          </button>
+          !isDelivery && (
+            <button
+              className="tap"
+              onClick={onAdd}
+              style={{
+                background: C.primary,
+                color: "#fff",
+                border: "none",
+                borderRadius: 12,
+                padding: "9px 13px",
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                fontWeight: 700,
+                fontSize: 12.5,
+              }}
+            >
+              <Plus size={15} />
+              New
+            </button>
+          )
         }
       />
 

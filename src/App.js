@@ -50,6 +50,7 @@ import {
   uid,
   todayStr,
   fmtINR,
+  fmtBalance,
   fmtDateShort,
   monthKey,
   iconFor,
@@ -67,7 +68,10 @@ import {
   QtyLine,
   StatusPill,
 } from "./components/Shared";
+import ImportExportModal from "./components/ImportExportModal";
+
 import LocationPicker from "./components/LocationPicker";
+// import LoginScreen from "./components/LoginScreen";
 import DashboardTab from "./features/dashboard/Dashboard";
 import OrdersTab from "./features/orders/OrdersTab";
 
@@ -219,6 +223,10 @@ export default function App() {
     "business-data",
     EMPTY_DATA,
   );
+  const [userSession, setUserSession] = useCapacitorStorage(
+    "user-session",
+    null,
+  );
   const [tab, setTab] = useState("dashboard");
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [orderModal, setOrderModal] = useState(null); // { order?, prefillCustomer? } or null
@@ -227,11 +235,21 @@ export default function App() {
   const [returnModalOrder, setReturnModalOrder] = useState(null); // { order, bottlesReturned }
   const [activeCustomer, setActiveCustomer] = useState(null);
   const [moreView, setMoreView] = useState("menu"); // menu | products | recurring | notifications
+  const [importExportModalOpen, setImportExportModalOpen] = useState(false);
 
   useEffect(() => {
     if (isLoaded)
       setData((currentData) => generateRecurringForToday(currentData));
   }, [isLoaded, setData]);
+
+  // RBAC: Delivery role tab redirection (commented out)
+  /*
+  useEffect(() => {
+    if (userSession?.role === "delivery" && tab !== "orders" && tab !== "more") {
+      setTab("orders");
+    }
+  }, [userSession, tab]);
+  */
 
   function update(mutator) {
     setData((prev) => {
@@ -281,63 +299,143 @@ export default function App() {
   function markDelivered(id) {
     const order = data.orders.find((item) => item.id === id);
     if (!order) return;
-
-    // Calculate actual milk quantity to ensure we only trigger the modal for genuine milk orders
-    const actualMilkBottles = (order.items || [])
-      .filter(
-        (it) =>
-          (it.category || "").toLowerCase() === "milk" ||
-          (it.productName || "").toLowerCase().includes("milk"),
-      )
-      .reduce((s, it) => s + (Number(it.qty) || 0), 0);
-
-    if (actualMilkBottles > 0) {
-      setReturnModalOrder(order);
-    } else {
-      // Directly mark as delivered without modal for non-milk orders
-      confirmDelivery(order.id, 0);
-    }
+    // Open unified delivery modal for all orders
+    setReturnModalOrder(order);
   }
 
-  function confirmDelivery(orderId, bottlesReturned) {
+  function confirmDelivery(payload, maybeBottles) {
+    let orderId, deliveredBy, customAmount, bottlesReturned;
+    if (typeof payload === "object" && payload !== null) {
+      orderId = payload.orderId;
+      deliveredBy = payload.deliveredBy;
+      customAmount = payload.customAmount;
+      bottlesReturned = payload.bottlesReturned;
+    } else {
+      orderId = payload;
+      bottlesReturned = maybeBottles;
+    }
+
     const existingOrder = data.orders.find((o) => o.id === orderId);
     if (!existingOrder) return;
 
-    const actualMilkBottles = (existingOrder.items || [])
-      .filter(
-        (it) =>
-          (it.category || "").toLowerCase() === "milk" ||
-          (it.productName || "").toLowerCase().includes("milk"),
-      )
-      .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    const parsedBottlesReturned = Number(bottlesReturned);
+    // Allow returning bottles accumulated from previous orders by not capping at current order qty.
+    // Only ensure the value is non-negative.
+    const validBottles = Number.isFinite(parsedBottlesReturned)
+      ? Math.max(0, Math.floor(parsedBottlesReturned))
+      : 0;
 
-    const numReturned =
-      typeof bottlesReturned === "number"
-        ? bottlesReturned
-        : Number(bottlesReturned) || 0;
-    const validBottles = Math.min(Math.max(0, numReturned), actualMilkBottles);
+    const finalDeliveredBy = String(deliveredBy || "").trim();
+    const orderTotalVal = Number(existingOrder.total) || orderTotal(existingOrder.items || []);
+    const parsedCustomAmount = Number(customAmount);
+    const finalCustomAmount =
+      customAmount !== undefined && customAmount !== null && customAmount !== ""
+        ? Number.isFinite(parsedCustomAmount)
+          ? Math.max(0, Math.round(parsedCustomAmount))
+          : 0
+        : orderTotalVal;
+
+    let paymentStatus = existingOrder.paymentStatus || "Pending";
+    if (finalCustomAmount >= orderTotalVal) {
+      paymentStatus = "Paid";
+    } else if (finalCustomAmount > 0) {
+      paymentStatus = "Partial";
+    } else {
+      paymentStatus = "Pending";
+    }
 
     const deliveredOrder = {
       ...existingOrder,
+      total: orderTotalVal,
       orderStatus: "Delivered",
+      deliveredBy: finalDeliveredBy || existingOrder.deliveredBy || "",
+      deliveryBoyName: finalDeliveredBy || existingOrder.deliveryBoyName || "",
+      customAmount: finalCustomAmount,
+      amountPaid: finalCustomAmount,
+      paymentStatus,
       bottlesReturned: validBottles,
+      deliveredAt: new Date().toISOString(),
     };
 
-    setData((prev) => ({
-      ...prev,
-      orders: prev.orders.map((o) => (o.id === orderId ? deliveredOrder : o)),
-    }));
+    update((d) => {
+      const idx = d.orders.findIndex((o) => o.id === orderId);
+      if (idx >= 0) {
+        d.orders[idx] = deliveredOrder;
+      }
+      // Recompute and persist balance on customer record
+      if (deliveredOrder.customerId) {
+        const custOrders = d.orders.filter(
+          (o) =>
+            String(o.customerId) === String(deliveredOrder.customerId) &&
+            o.orderStatus !== "Cancelled",
+        );
+        const totalPaid = custOrders.reduce((sum, o) => {
+          const paid =
+            o.customAmount !== undefined && o.customAmount !== null
+              ? Number(o.customAmount)
+              : o.paymentStatus === "Paid"
+                ? Number(o.total)
+                : Number(o.amountPaid) || 0;
+          return sum + (Number(paid) || 0);
+        }, 0);
+        const totalPurchased = custOrders.reduce(
+          (sum, o) => sum + (Number(o.total) || 0),
+          0,
+        );
+        const custIdx = d.customers.findIndex(
+          (c) => String(c.id) === String(deliveredOrder.customerId),
+        );
+        if (custIdx >= 0) {
+          d.customers[custIdx] = {
+            ...d.customers[custIdx],
+            balance: totalPaid - totalPurchased,
+          };
+        }
+      }
+      return d;
+    });
 
     setReturnModalOrder(null);
     openDeliveryWhatsApp(deliveredOrder, data.orders, data.customers);
+  }
+
+  function clearCustomerBottleBalance(customerId) {
+    update((d) => {
+      const customer = d.customers.find(
+        (c) => String(c.id) === String(customerId),
+      );
+      if (!customer) return d;
+
+      const bottleBalance = d.orders
+        .filter(
+          (order) =>
+            String(order.customerId) === String(customerId) &&
+            order.orderStatus !== "Cancelled",
+        )
+        .reduce((balance, order) => {
+          const sent = (order.items || [])
+            .filter(
+              (item) =>
+                (item.category || "").toLowerCase() === "milk" ||
+                (item.productName || "").toLowerCase().includes("milk"),
+            )
+            .reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+          return balance + sent - (Number(order.bottlesReturned) || 0);
+        }, 0);
+
+      customer.bottleBalanceAdjustment = -bottleBalance;
+      return d;
+    });
   }
 
   function markPaid(id) {
     update((d) => {
       const o = d.orders.find((o) => o.id === id);
       if (o) {
+        const total = Number(o.total) || orderTotal(o.items || []);
         o.paymentStatus = "Paid";
-        o.amountPaid = o.total;
+        o.amountPaid = total;
+        o.customAmount = total;
       }
       return d;
     });
@@ -347,7 +445,7 @@ export default function App() {
   function upsertCustomer(c) {
     update((d) => {
       const idx = d.customers.findIndex((x) => x.id === c.id);
-      if (idx >= 0) d.customers[idx] = c;
+      if (idx >= 0) d.customers[idx] = { ...d.customers[idx], ...c };
       else d.customers.push(c);
       return d;
     });
@@ -392,12 +490,27 @@ export default function App() {
     (o) => o.paymentStatus !== "Paid" && o.orderStatus !== "Cancelled",
   ).length;
 
+  // RBAC: Login Screen gating (commented out for now)
+  /*
+  if (isLoaded && isSessionLoaded && !userSession) {
+    return (
+      <LoginScreen
+        onLogin={(session) => {
+          setUserSession(session);
+          if (session.role === "delivery") setTab("orders");
+        }}
+        deliveryBoys={data.deliveryBoys || []}
+      />
+    );
+  }
+  */
+
   return (
-      <div
-        style={{
-          minHeight: "100vh",
-          background: C.bg,
-          fontFamily: "'DM Sans',sans-serif",
+    <div
+      style={{
+        minHeight: "100vh",
+        background: C.bg,
+        fontFamily: "'DM Sans',sans-serif",
         color: C.ink,
         paddingBottom: 84,
       }}
@@ -414,7 +527,7 @@ export default function App() {
         `}</style>
 
       <div style={{ maxWidth: 480, margin: "0 auto", position: "relative" }}>
-        <SharedAppHeader logo={logoIcon} />
+        <SharedAppHeader logo={logoIcon} userSession={userSession} onLogout={() => setUserSession(null)} />
         {tab === "dashboard" && (
           <DashboardTab
             data={data}
@@ -445,6 +558,7 @@ export default function App() {
             onMarkDelivered={markDelivered}
             onMarkPaid={markPaid}
             OrderRow={OrderRow}
+            userSession={userSession}
           />
         )}
         {tab === "customers" && (
@@ -457,6 +571,7 @@ export default function App() {
             onNewOrderFor={(c) => setOrderModal({ prefillCustomer: c })}
             onEditOrder={(o) => setOrderModal({ order: o })}
             onDeleteCustomer={deleteCustomer}
+            onClearBottleBalance={clearCustomerBottleBalance}
           />
         )}
         {tab === "reports" && <ReportsTab data={data} />}
@@ -469,13 +584,14 @@ export default function App() {
             onAddRecurring={() => setRecurModal({})}
             onEditRecurring={(r) => setRecurModal({ recurring: r })}
             onDeleteRecurring={deleteRecurring}
+            onOpenImportExport={() => setImportExportModalOpen(true)}
             pendingDeliveries={pendingDeliveries}
             pendingPayments={pendingPayments}
           />
         )}
       </div>
 
-      <SharedBottomNav tab={tab} setTab={setTab} badge={pendingDeliveries} />
+      <SharedBottomNav tab={tab} setTab={setTab} badge={pendingDeliveries} role="owner" /* RBAC disabled: show all tabs */ />
 
       {orderModal && (
         <OrderModal
@@ -515,10 +631,18 @@ export default function App() {
       {returnModalOrder && (
         <ReturnBottleModal
           order={returnModalOrder}
+          userSession={userSession}
+          data={data}
           onClose={() => setReturnModalOrder(null)}
           onConfirm={confirmDelivery}
         />
       )}
+      <ImportExportModal
+        isOpen={importExportModalOpen}
+        onClose={() => setImportExportModalOpen(false)}
+        data={data}
+        setData={setData}
+      />
     </div>
   );
 }
@@ -616,6 +740,38 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
       >
         <StatusPill status={order.orderStatus} kind="order" />
         <StatusPill status={order.paymentStatus} kind="pay" />
+        {order.deliveredBy && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              padding: "2px 8px",
+              borderRadius: 12,
+              background: C.primarySoft,
+              color: C.primaryDark,
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            By: {order.deliveredBy}
+          </span>
+        )}
+        {order.customAmount !== undefined && order.customAmount !== null && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              padding: "2px 8px",
+              borderRadius: 12,
+              background: C.goldSoft,
+              color: C.gold,
+              display: "inline-flex",
+              alignItems: "center",
+            }}
+          >
+            Paid: {fmtINR(order.customAmount)}
+          </span>
+        )}
         {order.bottlesReturned > 0 && (
           <StatusPill
             status={`Returned: ${order.bottlesReturned}`}
@@ -718,6 +874,7 @@ function CustomerDetail({
   onEditCustomer,
   onDeleteCustomer,
   onEditOrder,
+  onClearBottleBalance,
 }) {
   const [viewTab, setViewTab] = useState("orders");
   const [downloadingMonthKey, setDownloadingMonthKey] = useState(null);
@@ -766,9 +923,15 @@ function CustomerDetail({
     const map = {};
     ledgerOrders.forEach((o) => {
       const total = getOrderTotal(o);
-      const paid = Number(o.amountPaid) || 0;
-      const due = Math.max(0, total - paid);
-      runningBalance += due;
+      const paid =
+        o.customAmount !== undefined && o.customAmount !== null
+          ? Number(o.customAmount)
+          : o.paymentStatus === "Paid"
+            ? total
+            : Number(o.amountPaid) || 0;
+      // Balance impact: amount paid minus order charges
+      const balanceImpact = paid - total;
+      runningBalance += balanceImpact;
       map[o.id] = runningBalance;
     });
     return { cumulativeBalanceMap: map, customerBalance: runningBalance };
@@ -889,9 +1052,9 @@ function CustomerDetail({
           />
 
           <MiniStat
-            label="Pending Payment"
-            value={fmtINR(customerBalance)}
-            tone={customerBalance > 0 ? C.brick : C.ink}
+            label="Customer Balance"
+            value={fmtBalance(customerBalance)}
+            tone={customerBalance > 0 ? C.green : customerBalance < 0 ? C.brick : C.ink}
           />
 
           <MiniStat
@@ -972,6 +1135,49 @@ function CustomerDetail({
           </button>
         </div>
 
+        {/* CLEAR ALL BOTTLE BALANCE */}
+        <div style={{ marginTop: 10 }}>
+          <button
+            className="tap"
+            onClick={async () => {
+              let confirmed = false;
+              try {
+                const res = await Dialog.confirm({
+                  title: "Clear Bottle Balance",
+                  message: `Are you sure you want to clear all bottle balance for ${full.name}? This will reset bottles owed to 0.`,
+                  okButtonTitle: "Clear",
+                  cancelButtonTitle: "Cancel",
+                });
+                confirmed = res.value;
+              } catch (e) {
+                confirmed = window.confirm(
+                  `Are you sure you want to clear all bottle balance for ${full.name}? This will reset bottles owed to 0.`,
+                );
+              }
+              if (confirmed && onClearBottleBalance) {
+                onClearBottleBalance(full.id);
+              }
+            }}
+            style={{
+              width: "100%",
+              background: full.bottlesOwed > 0 ? C.goldSoft : C.paper,
+              color: full.bottlesOwed > 0 ? C.gold : C.inkMute,
+              border: `1px solid ${full.bottlesOwed > 0 ? C.gold : C.paperLine}`,
+              borderRadius: 12,
+              padding: "10px 14px",
+              fontWeight: 700,
+              fontSize: 13,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              cursor: "pointer",
+            }}
+          >
+            <span>🥛</span> Clear All Bottle Balance
+          </button>
+        </div>
+
         {/* SECTION TOGGLE: ORDER HISTORY VS BILLING HISTORY */}
         <div
           style={{
@@ -1044,7 +1250,10 @@ function CustomerDetail({
           {orders.map((o) => {
             const isCancelled = o.orderStatus === "Cancelled";
             const orderTotalVal = getOrderTotal(o);
-            const amountPaid = Number(o.amountPaid) || 0;
+            const amountPaid =
+              o.customAmount !== undefined && o.customAmount !== null
+                ? Number(o.customAmount) || 0
+                : Number(o.amountPaid) || 0;
             const orderDue = Math.max(0, orderTotalVal - amountPaid);
             const cumBal = cumulativeBalanceMap[o.id];
 
@@ -1117,12 +1326,21 @@ function CustomerDetail({
                           padding: "2px 5px",
                           borderRadius: 4,
                           background:
-                            cumBal > 0 ? C.brickSoft || "#ffebee" : "#f1f3f5",
-                          color: cumBal > 0 ? C.brick || "#c62828" : "#6c757d",
+                            cumBal > 0
+                              ? C.greenSoft || "#e8f5e9"
+                              : cumBal < 0
+                                ? C.brickSoft || "#ffebee"
+                                : "#f1f3f5",
+                          color:
+                            cumBal > 0
+                              ? C.green || "#2e7d32"
+                              : cumBal < 0
+                                ? C.brick || "#c62828"
+                                : "#6c757d",
                           fontFamily: "'JetBrains Mono',monospace",
                         }}
                       >
-                        Cum. Bal: {fmtINR(cumBal)}
+                        Cum. Bal: {fmtBalance(cumBal)}
                       </span>
                     )}
 
@@ -1400,6 +1618,7 @@ function CustomersTab({
   onNewOrderFor,
   onEditOrder,
   onDeleteCustomer,
+  onClearBottleBalance,
 }) {
   const [q, setQ] = useState("");
   const [selectedRouteCustomers, setSelectedRouteCustomers] = useState([]);
@@ -1411,6 +1630,8 @@ function CustomersTab({
         ...c,
         totalOrders: 0,
         totalAmount: 0,
+        totalPaid: 0,
+        balance: c.balance !== undefined ? c.balance : 0,
         pending: 0,
         lastOrder: null,
         bottlesOwed: 0,
@@ -1420,11 +1641,23 @@ function CustomersTab({
       if (!map[o.customerId]) return;
       if (o.orderStatus === "Cancelled") return;
       map[o.customerId].totalOrders += 1;
-      map[o.customerId].totalAmount += o.total;
+      const orderTotalVal = Number(o.total) || 0;
+      map[o.customerId].totalAmount += orderTotalVal;
+      const paid =
+        o.customAmount !== undefined && o.customAmount !== null
+          ? Number(o.customAmount)
+          : o.paymentStatus === "Paid"
+            ? orderTotalVal
+            : Number(o.amountPaid) || 0;
+      map[o.customerId].totalPaid += paid;
       map[o.customerId].pending += amountDue(o);
 
-      const delivered = o.items
-        .filter((it) => it.category === "Milk")
+      const delivered = (o.items || [])
+        .filter(
+          (it) =>
+            (it.category || "").toLowerCase() === "milk" ||
+            (it.productName || "").toLowerCase().includes("milk"),
+        )
         .reduce((s, it) => s + (Number(it.qty) || 0), 0);
       const returned = Number(o.bottlesReturned) || 0;
       map[o.customerId].bottlesOwed += delivered - returned;
@@ -1437,7 +1670,11 @@ function CustomersTab({
     });
     return Object.values(map).map((customer) => ({
       ...customer,
-      bottlesOwed: Math.max(0, customer.bottlesOwed),
+      balance: customer.totalPaid - customer.totalAmount,
+      bottlesOwed: Math.max(
+        0,
+        customer.bottlesOwed + (Number(customer.bottleBalanceAdjustment) || 0),
+      ),
     }));
   }, [data]);
 
@@ -1461,6 +1698,8 @@ function CustomersTab({
       ...activeCustomer,
       totalOrders: 0,
       totalAmount: 0,
+      totalPaid: 0,
+      balance: 0,
       pending: 0,
       lastOrder: null,
       bottlesOwed: 0,
@@ -1476,6 +1715,7 @@ function CustomersTab({
         onEditCustomer={onEditCustomer}
         onDeleteCustomer={onDeleteCustomer}
         onEditOrder={onEditOrder}
+        onClearBottleBalance={onClearBottleBalance}
       />
     );
   }
@@ -1621,13 +1861,20 @@ function CustomersTab({
               >
                 {fmtINR(c.totalAmount)}
               </div>
-              {c.pending > 0 && (
-                <div
-                  style={{ fontSize: 10.5, color: C.brick, fontWeight: 700 }}
-                >
-                  {fmtINR(c.pending)} due
-                </div>
-              )}
+              <div
+                style={{
+                  fontSize: 10.5,
+                  color:
+                    c.balance > 0
+                      ? C.green
+                      : c.balance < 0
+                        ? C.brick
+                        : C.inkMute,
+                  fontWeight: 700,
+                }}
+              >
+                Bal: {fmtBalance(c.balance)}
+              </div>
               <div
                 style={{
                   fontSize: 10.5,
@@ -1676,12 +1923,63 @@ function MiniStat({ label, value, tone }) {
 function ReportsTab({ data }) {
   const [view, setView] = useState("daily"); // daily | monthly
   const [month, setMonth] = useState(monthKey(todayStr()));
+  const [selectedStaff, setSelectedStaff] = useState("All");
 
-  // Memoized orders for the active month to avoid unnecessary re-filtering
+  // Unique list of staff from delivery boys and orders
+  const staffList = useMemo(() => {
+    const set = new Set();
+    (data.deliveryBoys || []).forEach((b) => b.name && set.add(b.name));
+    (data.orders || []).forEach((o) => {
+      const staff = o.deliveredBy || o.deliveryBoyName;
+      if (staff) set.add(staff);
+      else if (o.orderStatus !== "Cancelled") set.add("Unassigned");
+    });
+    return Array.from(set).filter(Boolean).sort();
+  }, [data.deliveryBoys, data.orders]);
+
+  // Orders for the active month, optionally filtered by delivered by staff
   const monthOrders = useMemo(() => {
-    return data.orders.filter(
+    return data.orders.filter((o) => {
+      if (monthKey(o.orderDate) !== month || o.orderStatus === "Cancelled") return false;
+      if (selectedStaff !== "All") {
+        const staff = o.deliveredBy || o.deliveryBoyName || "Unassigned";
+        return staff.toLowerCase().trim() === selectedStaff.toLowerCase().trim();
+      }
+      return true;
+    });
+  }, [data.orders, month, selectedStaff]);
+
+  // Overall staff breakdown for the selected month
+  const staffBreakdown = useMemo(() => {
+    const rawMonthOrders = data.orders.filter(
       (o) => monthKey(o.orderDate) === month && o.orderStatus !== "Cancelled",
     );
+    const map = {};
+    rawMonthOrders.forEach((o) => {
+      const staff = o.deliveredBy || o.deliveryBoyName || "Unassigned";
+      if (!map[staff]) {
+        map[staff] = {
+          name: staff,
+          deliveries: 0,
+          totalSales: 0,
+          totalCollected: 0,
+          bottlesReturned: 0,
+        };
+      }
+      if (o.orderStatus === "Delivered") {
+        map[staff].deliveries += 1;
+      }
+      map[staff].totalSales += Number(o.total) || 0;
+      const collected =
+        o.customAmount !== undefined && o.customAmount !== null
+          ? Number(o.customAmount)
+          : o.paymentStatus === "Paid"
+            ? Number(o.total) || 0
+            : Number(o.amountPaid) || 0;
+      map[staff].totalCollected += collected;
+      map[staff].bottlesReturned += Number(o.bottlesReturned) || 0;
+    });
+    return Object.values(map).sort((a, b) => b.deliveries - a.deliveries);
   }, [data.orders, month]);
 
   // Memoized calculations and performance metrics, including dailySeries
@@ -1696,10 +1994,16 @@ function ReportsTab({ data }) {
   } = useMemo(() => {
     const sales = monthOrders.reduce((s, o) => s + Number(o.total), 0);
     const paid = monthOrders.reduce(
-      (s, o) => s + (o.paymentStatus === "Paid" ? Number(o.total) : Number(o.amountPaid || 0)),
+      (s, o) =>
+        s +
+        (o.customAmount !== undefined && o.customAmount !== null
+          ? Number(o.customAmount) || 0
+          : o.paymentStatus === "Paid"
+            ? Number(o.total)
+            : Number(o.amountPaid || 0)),
       0,
     );
-    const pending = sales - paid;
+    const pending = monthOrders.reduce((sum, order) => sum + amountDue(order), 0);
 
     const totals = { Milk: 0, Paneer: 0, Curd: 0 };
     monthOrders.forEach((o) => {
@@ -1773,42 +2077,80 @@ function ReportsTab({ data }) {
 
   // CSV Exports wrapped in quotes to prevent structural corruption from commas in names/addresses
   function exportMonthlyCSV() {
-  const rows = [
-    [
-      "Date",
-      "Customer",
-      "Phone",
-      "Products",
-      "Total",
-      "Payment Status",
-      "Order Status",
-    ],
-  ];
+    const rows = [
+      [
+        "Date",
+        "Customer",
+        "Phone",
+        "Products",
+        "Total (₹)",
+        "Amount Collected (₹)",
+        "Payment Status",
+        "Order Status",
+        "Delivered By",
+      ],
+    ];
 
-  monthOrders.forEach((o) => {
-    const itemsStr = o.items
-      .map((it) => `${it.qty}${it.unit} ${it.productName}`)
-      .join(" + ");
+    monthOrders.forEach((o) => {
+      const itemsStr = (o.items || [])
+        .map((it) => `${it.qty}${it.unit || ""} ${it.productName || it.name}`)
+        .join(" + ");
 
-    rows.push([
-      o.orderDate,
-      o.customerName || "",
-      o.phone || "",
-      itemsStr,
-      o.total,
-      o.paymentStatus,
-      o.orderStatus,
-    ]);
-  });
+      const collected =
+        o.customAmount !== undefined && o.customAmount !== null
+          ? o.customAmount
+          : o.paymentStatus === "Paid"
+            ? o.total
+            : o.amountPaid || 0;
 
-  csvDownload(`sales-report-${month}.csv`, rows);
-}
+      rows.push([
+        o.orderDate,
+        o.customerName || "",
+        o.phone || "",
+        itemsStr,
+        o.total,
+        collected,
+        o.paymentStatus,
+        o.orderStatus,
+        o.deliveredBy || o.deliveryBoyName || "Unassigned",
+      ]);
+    });
+
+    const staffSuffix = selectedStaff !== "All" ? `-${selectedStaff}` : "";
+    csvDownload(`sales-report-${month}${staffSuffix}.csv`, rows);
+  }
+
+  function exportDeliveryStaffCSV() {
+    const rows = [
+      [
+        "Staff Name",
+        "Delivered Orders",
+        "Total Order Value (₹)",
+        "Total Amount Collected (₹)",
+        "Empty Bottles Returned",
+      ],
+    ];
+
+    staffBreakdown.forEach((s) => {
+      rows.push([
+        s.name,
+        s.deliveries,
+        s.totalSales,
+        s.totalCollected,
+        s.bottlesReturned,
+      ]);
+    });
+
+    csvDownload(`delivery-staff-report-${month}.csv`, rows);
+  }
 
   function exportPendingCSV() {
   const rows = [["Date", "Customer", "Phone", "Amount Due"]];
 
   data.orders
-    .filter((o) => Number(amountDue(o)) > 0)
+      .filter(
+        (o) => o.orderStatus !== "Cancelled" && Number(amountDue(o)) > 0,
+      )
     .forEach((o) => {
       rows.push([
         o.orderDate,
@@ -1867,20 +2209,78 @@ function ReportsTab({ data }) {
         />
       </div>
 
-      <div style={{ padding: "14px 16px 0" }}>
-        <input
-          type="month"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-          max={monthKey(todayStr())}
-          style={{
-            padding: "9px 12px",
-            borderRadius: 10,
-            border: `1px solid ${C.paperLine}`,
-            fontSize: 13,
-            background: C.paper,
-          }}
-        />
+      <div
+        style={{
+          padding: "14px 16px 0",
+          display: "flex",
+          gap: 10,
+          alignItems: "flex-end",
+        }}
+      >
+        <div style={{ flex: 1 }}>
+          <label
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: C.inkMute,
+              display: "block",
+              marginBottom: 4,
+              letterSpacing: 0.5,
+            }}
+          >
+            MONTH
+          </label>
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            max={monthKey(todayStr())}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 10,
+              border: `1px solid ${C.paperLine}`,
+              fontSize: 12.5,
+              background: C.paper,
+            }}
+          />
+        </div>
+
+        <div style={{ flex: 1 }}>
+          <label
+            style={{
+              fontSize: 10.5,
+              fontWeight: 700,
+              color: C.inkMute,
+              display: "block",
+              marginBottom: 4,
+              letterSpacing: 0.5,
+            }}
+          >
+            DELIVERED BY
+          </label>
+          <select
+            value={selectedStaff}
+            onChange={(e) => setSelectedStaff(e.target.value)}
+            style={{
+              width: "100%",
+              padding: "9px 10px",
+              borderRadius: 10,
+              border: `1px solid ${selectedStaff !== "All" ? C.primary : C.paperLine}`,
+              fontSize: 12.5,
+              background: selectedStaff !== "All" ? C.primarySoft : C.paper,
+              color: selectedStaff !== "All" ? C.primaryDark : C.ink,
+              fontWeight: selectedStaff !== "All" ? 700 : 500,
+            }}
+          >
+            <option value="All">All Staff ({staffList.length})</option>
+            {staffList.map((st) => (
+              <option key={st} value={st}>
+                {st}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       <div
@@ -2063,6 +2463,128 @@ function ReportsTab({ data }) {
         </div>
       </div>
 
+      {/* STAFF DELIVERY BREAKDOWN */}
+      <div style={{ padding: "16px 16px 0" }}>
+        <div
+          style={{
+            fontWeight: 700,
+            fontSize: 13,
+            marginBottom: 8,
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <span>Staff Deliveries ({month})</span>
+          {selectedStaff !== "All" && (
+            <button
+              className="tap"
+              onClick={() => setSelectedStaff("All")}
+              style={{
+                fontSize: 11,
+                border: "none",
+                background: C.primarySoft,
+                color: C.primaryDark,
+                borderRadius: 8,
+                padding: "3px 8px",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              Reset Filter
+            </button>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {staffBreakdown.length === 0 ? (
+            <div
+              style={{
+                fontSize: 12,
+                color: C.inkMute,
+                textAlign: "center",
+                padding: "16px 0",
+                background: C.paper,
+                borderRadius: 12,
+                border: `1px solid ${C.paperLine}`,
+              }}
+            >
+              No delivery data recorded for this month.
+            </div>
+          ) : (
+            staffBreakdown.map((st) => (
+              <div
+                key={st.name}
+                className="tap"
+                onClick={() =>
+                  setSelectedStaff(st.name === selectedStaff ? "All" : st.name)
+                }
+                style={{
+                  background:
+                    selectedStaff === st.name ? C.primarySoft : C.paper,
+                  border: `1px solid ${selectedStaff === st.name ? C.primary : C.paperLine}`,
+                  borderRadius: 12,
+                  padding: "10px 12px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  cursor: "pointer",
+                }}
+              >
+                <div>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 13.5,
+                      color: C.ink,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <span>🚚</span> {st.name}
+                    {selectedStaff === st.name && (
+                      <span
+                        style={{
+                          fontSize: 9.5,
+                          background: C.primary,
+                          color: "#fff",
+                          borderRadius: 6,
+                          padding: "1px 5px",
+                        }}
+                      >
+                        Active Filter
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: C.inkMute,
+                      marginTop: 2,
+                    }}
+                  >
+                    {st.deliveries} delivered • {st.bottlesReturned} bottles returned
+                  </div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 13,
+                      fontFamily: "'JetBrains Mono',monospace",
+                      color: C.primaryDark,
+                    }}
+                  >
+                    {fmtINR(st.totalCollected)}
+                  </div>
+                  <div style={{ fontSize: 10, color: C.inkMute }}>collected</div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
       <div style={{ padding: "18px 16px 4px", fontWeight: 700, fontSize: 14 }}>
         Export
       </div>
@@ -2077,6 +2599,10 @@ function ReportsTab({ data }) {
         <ExportBtn
           label="Monthly Sales Report (CSV)"
           onClick={exportMonthlyCSV}
+        />
+        <ExportBtn
+          label="Delivery Staff Report (CSV)"
+          onClick={exportDeliveryStaffCSV}
         />
         <ExportBtn
           label="Pending Payment Report (CSV)"
@@ -2120,6 +2646,7 @@ function MoreTab({
   onAddRecurring,
   onEditRecurring,
   onDeleteRecurring,
+  onOpenImportExport,
   pendingDeliveries,
   pendingPayments,
 }) {
@@ -2163,7 +2690,13 @@ function MoreTab({
       desc: `${pendingDeliveries} deliveries · ${pendingPayments} payments due`,
       icon: "🔔",
     },
-  ];
+    {
+      id: "import-export",
+      label: "Import/Export",
+      desc: "Backup & restore app data",
+      icon: "📤",
+    },
+];
   return (
     <div>
       <SharedTopBar title="More" subtitle="Settings & tools" />
@@ -2179,7 +2712,13 @@ function MoreTab({
           <div
             key={it.id}
             className="tap"
-            onClick={() => setView(it.id)}
+            onClick={() => {
+              if (it.id === "import-export") {
+                onOpenImportExport();
+              } else {
+                setView(it.id);
+              }
+            }}
             style={{
               background: C.paper,
               border: `1px solid ${C.paperLine}`,
@@ -3058,6 +3597,11 @@ function OrderModal({
       notes,
       total,
       bottlesReturned: Number(bottlesReturned) || 0,
+      deliveredBy: initial?.deliveredBy,
+      customAmount:
+        initial?.customAmount !== undefined && initial?.customAmount !== null
+          ? safeAmountPaid
+          : undefined,
       latitude,
       longitude,
       createdAt: initial?.createdAt || new Date().toISOString(),
@@ -3558,10 +4102,9 @@ function CustomerModal({ initial, onClose, onSave }) {
           onChange={(e) => setAddress(e.target.value)}
         />
       </Field>
-      <Field label="Customer GPS Location">
-        <Field label="Customer Location">
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <button
+      <Field label="Customer Location">
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <button
               className="tap"
               onClick={handleGetLocation}
               disabled={locLoading}
@@ -3589,24 +4132,23 @@ function CustomerModal({ initial, onClose, onSave }) {
                 : hasCoordinates({ latitude, longitude })
                   ? "Update GPS"
                   : "Get GPS"}
-            </button>
-            {hasCoordinates({ latitude, longitude }) && (
-              <span style={{ fontSize: 11.5, color: C.inkMute }}>
-                {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}
-              </span>
-            )}
-          </div>
-          <div style={{ marginTop: 10 }}>
-            <LocationPicker
-              latitude={latitude}
-              longitude={longitude}
-              onChange={({ latitude: lat, longitude: lng }) => {
-                setLatitude(lat);
-                setLongitude(lng);
-              }}
-            />
-          </div>
-        </Field>
+          </button>
+          {hasCoordinates({ latitude, longitude }) && (
+            <span style={{ fontSize: 11.5, color: C.inkMute }}>
+              {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}
+            </span>
+          )}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <LocationPicker
+            latitude={latitude}
+            longitude={longitude}
+            onChange={({ latitude: lat, longitude: lng }) => {
+              setLatitude(lat);
+              setLongitude(lng);
+            }}
+          />
+        </div>
       </Field>
     </ModalShell>
   );
@@ -3904,14 +4446,73 @@ function RecurringModal({ initial, products, customers, onClose, onSave }) {
   );
 }
 
-/* ============================== RETURN BOTTLE MODAL ============================== */
-function ReturnBottleModal({ order, onClose, onConfirm }) {
+/* ============================== UNIFIED DELIVERY MODAL ============================== */
+function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
+  const [deliveredBy, setDeliveredBy] = useState(
+    order.deliveredBy || order.deliveryBoyName || userSession?.name || "",
+  );
+  const [customAmount, setCustomAmount] = useState(
+    order.customAmount !== undefined && order.customAmount !== null
+      ? String(order.customAmount)
+      : String(order.total || 0),
+  );
   const [count, setCount] = useState(order.bottlesReturned || 0);
 
-  // Calculate how many bottles they ARE receiving today to show as a hint
-  const bottlesSent = order.items
-    .filter((it) => it.category === "Milk")
+  // Calculate how many bottles they ARE receiving today
+  const bottlesSent = (order.items || [])
+    .filter(
+      (it) =>
+        (it.category || "").toLowerCase() === "milk" ||
+        (it.productName || "").toLowerCase().includes("milk"),
+    )
     .reduce((s, it) => s + (Number(it.qty) || 0), 0);
+
+  // Customer's prior balance (across all other orders)
+  const priorBalance = useMemo(() => {
+    if (!order.customerId || !data?.orders) return 0;
+    const otherOrders = data.orders.filter(
+      (o) =>
+        String(o.customerId) === String(order.customerId) &&
+        String(o.id) !== String(order.id) &&
+        o.orderStatus !== "Cancelled",
+    );
+    const totalPaid = otherOrders.reduce((sum, o) => {
+      const paid =
+        o.customAmount !== undefined && o.customAmount !== null
+          ? Number(o.customAmount)
+          : o.paymentStatus === "Paid"
+            ? Number(o.total)
+            : Number(o.amountPaid) || 0;
+      return sum + (Number(paid) || 0);
+    }, 0);
+    const totalPurchased = otherOrders.reduce(
+      (sum, o) => sum + (Number(o.total) || 0),
+      0,
+    );
+    return totalPaid - totalPurchased;
+  }, [order.customerId, order.id, data?.orders]);
+
+  const parsedAmount = Math.round(Number(customAmount) || 0);
+  const orderTotalVal = Number(order.total) || 0;
+  const orderImpact = parsedAmount - orderTotalVal;
+  const resultingBalance = priorBalance + orderImpact;
+
+  const handleConfirm = () => {
+    const finalDeliveredBy = String(deliveredBy || "").trim();
+    const parsedAmount = Number(customAmount);
+    const finalAmount = Number.isFinite(parsedAmount)
+      ? Math.max(0, Math.round(parsedAmount))
+      : 0;
+    const parsedBottleCount = Number(count);
+    onConfirm({
+      orderId: order.id,
+      deliveredBy: finalDeliveredBy,
+      customAmount: finalAmount,
+      bottlesReturned: Number.isFinite(parsedBottleCount)
+        ? Math.max(0, Math.floor(parsedBottleCount))
+        : 0,
+    });
+  };
 
   return (
     <ModalShell
@@ -3920,7 +4521,7 @@ function ReturnBottleModal({ order, onClose, onConfirm }) {
       footer={
         <button
           className="tap"
-          onClick={() => onConfirm(order.id, Number(count))}
+          onClick={handleConfirm}
           style={{
             width: "100%",
             background: C.green,
@@ -3936,70 +4537,174 @@ function ReturnBottleModal({ order, onClose, onConfirm }) {
         </button>
       }
     >
-      <div style={{ textAlign: "center", marginBottom: 20 }}>
-        <div style={{ fontSize: 40 }}>🥛</div>
-        <div style={{ fontWeight: 700, fontSize: 16, marginTop: 10 }}>
+      <div style={{ textAlign: "center", marginBottom: 18 }}>
+        <div style={{ fontSize: 36 }}>🚚</div>
+        <div style={{ fontWeight: 700, fontSize: 16.5, marginTop: 6, color: C.ink }}>
           {order.customerName}
         </div>
-        <div style={{ fontSize: 13, color: C.inkMute }}>
-          Delivering {bottlesSent} bottles today
+        <div style={{ fontSize: 13, color: C.inkMute, marginTop: 2 }}>
+          Order Total: <b>{fmtINR(order.total)}</b>
+          {bottlesSent > 0 && ` • Delivering ${bottlesSent} bottle${bottlesSent > 1 ? "s" : ""}`}
         </div>
       </div>
 
-      <Field label="Empty Bottles Returned">
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-          <input
-            type="number"
+      {/* 1. DELIVERED BY */}
+      <Field label="Delivered By (Staff Name)">
+        <input
+          type="text"
+          placeholder="Enter staff / delivery person name"
+          value={deliveredBy}
+          onChange={(e) => setDeliveredBy(e.target.value)}
+          style={inputStyle}
+        />
+      </Field>
+
+      {/* 2. CUSTOM AMOUNT */}
+      <Field label="Custom Amount / Amount Collected (₹)">
+        <input
+          type="number"
+          step="1"
+          placeholder="0"
+          value={customAmount}
+          onChange={(e) => setCustomAmount(e.target.value)}
+          style={{
+            ...inputStyle,
+            fontSize: 20,
+            fontWeight: "700",
+            fontFamily: "'JetBrains Mono',monospace",
+          }}
+        />
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button
+            type="button"
+            className="tap"
+            onClick={() => setCustomAmount(String(orderTotalVal))}
             style={{
-              ...inputStyle,
-              textAlign: "center",
-              fontSize: 24,
-              fontWeight: "700",
+              flex: 1,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: `1px solid ${C.paperLine}`,
+              background: Number(customAmount) === orderTotalVal ? C.primarySoft : C.paper,
+              color: Number(customAmount) === orderTotalVal ? C.primaryDark : C.ink,
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: "pointer",
             }}
-            value={count}
-            onChange={(e) => setCount(e.target.value)}
-          />
+          >
+            Exact ({fmtINR(orderTotalVal)})
+          </button>
+          <button
+            type="button"
+            className="tap"
+            onClick={() => setCustomAmount("0")}
+            style={{
+              flex: 1,
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: `1px solid ${C.paperLine}`,
+              background: Number(customAmount) === 0 ? C.brickSoft : C.paper,
+              color: Number(customAmount) === 0 ? C.brick : C.ink,
+              fontSize: 11.5,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            ₹0 (Unpaid)
+          </button>
         </div>
+
+        {/* LIVE RESULTING BALANCE PREVIEW */}
         <div
           style={{
+            marginTop: 10,
+            padding: "10px 12px",
+            borderRadius: 10,
+            background: resultingBalance > 0 ? C.greenSoft : C.cream,
+            border: `1px solid ${resultingBalance > 0 ? C.green : C.paperLine}`,
             display: "flex",
-            justifyContent: "center",
-            gap: 8,
-            marginTop: 12,
+            justifyContent: "space-between",
+            alignItems: "center",
           }}
         >
-          {[0, 1, 2, 3, 4, 5].map((num) => (
-            <button
-              key={num}
-              className="tap"
-              onClick={() => setCount(num)}
-              style={{
-                padding: "8px 12px",
-                borderRadius: 8,
-                border: `1px solid ${C.paperLine}`,
-                background: Number(count) === num ? C.primary : C.paper,
-                color: Number(count) === num ? "#fff" : C.ink,
-                fontWeight: "700",
-              }}
-            >
-              {num}
-            </button>
-          ))}
+          <div>
+            <div style={{ fontSize: 11, color: C.inkMute, fontWeight: 600 }}>
+              Resulting Customer Balance
+            </div>
+            <div style={{ fontSize: 10, color: C.inkMute, marginTop: 1 }}>
+              Prev: {fmtBalance(priorBalance)} • Impact: {orderImpact >= 0 ? `+₹${orderImpact}` : `-₹${Math.abs(orderImpact)}`}
+            </div>
+          </div>
+          <div
+            style={{
+              fontSize: 16,
+              fontWeight: 800,
+              fontFamily: "'JetBrains Mono',monospace",
+              color: resultingBalance > 0 ? C.green : resultingBalance < 0 ? C.brick : C.ink,
+            }}
+          >
+            {fmtBalance(resultingBalance)}
+          </div>
         </div>
       </Field>
+
+      {/* 3. EMPTY BOTTLES RETURNED */}
+      {bottlesSent > 0 && (
+        <Field label="Empty Bottles Returned">
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            <input
+              type="number"
+              style={{
+                ...inputStyle,
+                textAlign: "center",
+                fontSize: 20,
+                fontWeight: "700",
+              }}
+              value={count}
+              onChange={(e) => setCount(e.target.value)}
+            />
+          </div>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 8,
+              marginTop: 10,
+            }}
+          >
+            {[0, 1, 2, 3, 4, 5].map((num) => (
+              <button
+                key={num}
+                type="button"
+                className="tap"
+                onClick={() => setCount(num)}
+                style={{
+                  padding: "7px 11px",
+                  borderRadius: 8,
+                  border: `1px solid ${C.paperLine}`,
+                  background: Number(count) === num ? C.primary : C.paper,
+                  color: Number(count) === num ? "#fff" : C.ink,
+                  fontWeight: "700",
+                  fontSize: 13,
+                }}
+              >
+                {num}
+              </button>
+            ))}
+          </div>
+        </Field>
+      )}
 
       <div
         style={{
           background: C.greenSoft,
-          padding: 12,
+          padding: 10,
           borderRadius: 10,
-          fontSize: 12,
+          fontSize: 11.5,
           color: C.green,
-          marginTop: 10,
+          marginTop: 12,
         }}
       >
-        <b>Note:</b> This will update the customer's bottle balance and send a
-        delivery confirmation via WhatsApp.
+        <b>Note:</b> Confirming will save delivery staff name, amount collected, bottle returns, and send WhatsApp delivery confirmation.
       </div>
     </ModalShell>
   );

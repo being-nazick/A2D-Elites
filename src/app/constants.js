@@ -70,7 +70,12 @@ export const DEFAULT_PRODUCTS = [
   { id: "p_paneer_500g", name: "Paneer (500 g)", category: "Paneer", unit: "Pack", price: 250, active: true },
 ];
 
-export const EMPTY_DATA = { products: DEFAULT_PRODUCTS, customers: [], orders: [], recurring: [] };
+export const DEFAULT_DELIVERY_BOYS = [
+  { id: "db_1", name: "Raju", phone: "9876543210" },
+  { id: "db_2", name: "Suresh", phone: "9876543211" },
+];
+
+export const EMPTY_DATA = { products: DEFAULT_PRODUCTS, customers: [], orders: [], recurring: [], deliveryBoys: DEFAULT_DELIVERY_BOYS };
 export const weekdayShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export const CATEGORY_ICON = { Milk: "🥛", Paneer: "🧀", Curd: "🥣" };
 

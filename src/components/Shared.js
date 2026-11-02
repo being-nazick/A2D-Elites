@@ -1,26 +1,110 @@
-import { ArrowLeft, BarChart3, ClipboardList, Download, MoreHorizontal, Package, Users, X } from "lucide-react";
+import { ArrowLeft, BarChart3, ClipboardList, Download, LogOut, MoreHorizontal, Package, Users, X, Shield, Truck } from "lucide-react";
 import { C, BUSINESS_NAME, BUSINESS_TAGLINE } from "../app/constants";
 import { iconFor } from "../app/helpers";
 
 export const navBtnStyle = { width: 30, height: 30, borderRadius: 10, border: `1px solid ${C.paperLine}`, background: C.paper, display: "flex", alignItems: "center", justifyContent: "center", color: C.ink };
 export const inputStyle = { width: "100%", padding: "10px 12px", borderRadius: 10, border: `1px solid ${C.paperLine}`, fontSize: 14, background: C.paper };
 
-export function AppHeader({ logo }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px 0" }}>
-    {logo && <img src={logo} alt={BUSINESS_NAME} style={{ width: 34, height: 34, borderRadius: 9, background: "#000", flexShrink: 0 }} />}
-    <div style={{ lineHeight: 1.1 }}><div style={{ fontFamily: "'Fraunces',serif", fontSize: 15.5, fontWeight: 700, color: C.primaryDark, letterSpacing: 0.2 }}>{BUSINESS_NAME}</div><div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, color: C.inkMute, letterSpacing: 1.2, textTransform: "uppercase" }}>{BUSINESS_TAGLINE}</div></div>
-  </div>;
+export function AppHeader({ logo, userSession, onLogout }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {logo && <img src={logo} alt={BUSINESS_NAME} style={{ width: 34, height: 34, borderRadius: 9, background: "#000", flexShrink: 0 }} />}
+        <div style={{ lineHeight: 1.1 }}>
+          <div style={{ fontFamily: "'Fraunces',serif", fontSize: 15.5, fontWeight: 700, color: C.primaryDark, letterSpacing: 0.2 }}>{BUSINESS_NAME}</div>
+          <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 9.5, color: C.inkMute, letterSpacing: 1.2, textTransform: "uppercase" }}>{BUSINESS_TAGLINE}</div>
+        </div>
+      </div>
+      {userSession && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "3px 8px",
+              borderRadius: 12,
+              background: userSession.role === "owner" ? C.primarySoft : C.goldSoft,
+              color: userSession.role === "owner" ? C.primaryDark : C.gold,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            {userSession.role === "owner" ? <Shield size={12} /> : <Truck size={12} />}
+            {userSession.name || (userSession.role === "owner" ? "Owner" : "Delivery")}
+          </span>
+          <button
+            className="tap"
+            onClick={onLogout}
+            title="Switch Role / Logout"
+            style={{
+              border: "none",
+              background: C.cream,
+              color: C.ink,
+              borderRadius: 8,
+              padding: "5px 7px",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+            }}
+          >
+            <LogOut size={13} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
-export function BottomNav({ tab, setTab, badge }) {
-  const items = [
-    { id: "dashboard", label: "Dashboard", icon: BarChart3 },
-    { id: "orders", label: "Orders", icon: Package },
-    { id: "customers", label: "Customers", icon: Users },
-    { id: "reports", label: "Reports", icon: ClipboardList },
-    { id: "more", label: "More", icon: MoreHorizontal },
+export function BottomNav({ tab, setTab, badge, role = "owner" }) {
+  const allItems = [
+    { id: "dashboard", label: "Dashboard", icon: BarChart3, roles: ["owner"] },
+    { id: "orders", label: "Orders", icon: Package, roles: ["owner", "delivery"] },
+    { id: "customers", label: "Customers", icon: Users, roles: ["owner"] },
+    { id: "reports", label: "Reports", icon: ClipboardList, roles: ["owner"] },
+    { id: "more", label: "More", icon: MoreHorizontal, roles: ["owner", "delivery"] },
   ];
-  return <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.paper, borderTop: `1px solid ${C.paperLine}`, boxShadow: "0 -4px 16px rgba(30,20,10,0.06)", zIndex: 40 }}><div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>{items.map((item) => { const active = tab === item.id; const Icon = item.icon; return <button key={item.id} className="tap" onClick={() => setTab(item.id)} style={{ flex: 1, border: "none", background: "transparent", padding: "10px 4px 8px", display: "flex", flexDirection: "column", alignItems: "center", gap: 3, position: "relative", color: active ? C.primary : C.inkMute }}><Icon size={20} strokeWidth={active ? 2.4 : 1.9} /><span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{item.label}</span>{item.id === "orders" && badge > 0 && <span style={{ position: "absolute", top: 4, right: "28%", background: C.brick, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 20, padding: "1px 5px", minWidth: 14, textAlign: "center" }}>{badge}</span>}</button>; })}</div></div>;
+  
+  const items = allItems.filter((item) => item.roles.includes(role));
+
+  return (
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: C.paper, borderTop: `1px solid ${C.paperLine}`, boxShadow: "0 -4px 16px rgba(30,20,10,0.06)", zIndex: 40 }}>
+      <div style={{ maxWidth: 480, margin: "0 auto", display: "flex" }}>
+        {items.map((item) => {
+          const active = tab === item.id;
+          const Icon = item.icon;
+          return (
+            <button
+              key={item.id}
+              className="tap"
+              onClick={() => setTab(item.id)}
+              style={{
+                flex: 1,
+                border: "none",
+                background: "transparent",
+                padding: "10px 4px 8px",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 3,
+                position: "relative",
+                color: active ? C.primary : C.inkMute,
+              }}
+            >
+              <Icon size={20} strokeWidth={active ? 2.4 : 1.9} />
+              <span style={{ fontSize: 10.5, fontWeight: active ? 700 : 500 }}>{item.label}</span>
+              {item.id === "orders" && badge > 0 && (
+                <span style={{ position: "absolute", top: 4, right: "28%", background: C.brick, color: "#fff", fontSize: 9, fontWeight: 700, borderRadius: 20, padding: "1px 5px", minWidth: 14, textAlign: "center" }}>
+                  {badge}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function TopBar({ title, subtitle, right }) {

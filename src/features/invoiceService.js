@@ -117,7 +117,11 @@ function buildBillMarkup(order, allOrders = [], customers = []) {
       0,
     );
 
-  const amountPaid = Number(order.amountPaid) || 0;
+  // Prefer customAmount (set via Delivery Modal) over raw amountPaid
+  const amountPaid =
+    order.customAmount !== undefined && order.customAmount !== null
+      ? Number(order.customAmount) || 0
+      : Number(order.amountPaid) || 0;
 
   const balanceDue = Math.max(0, totalAmount - amountPaid);
 
@@ -172,7 +176,11 @@ function buildBillMarkup(order, allOrders = [], customers = []) {
         0,
       );
 
-    const previousPaid = Number(previousOrder.amountPaid) || 0;
+    // Prefer customAmount for previous orders too
+    const previousPaid =
+      previousOrder.customAmount !== undefined && previousOrder.customAmount !== null
+        ? Number(previousOrder.customAmount) || 0
+        : Number(previousOrder.amountPaid) || 0;
 
     const previousDue = Math.max(0, previousTotal - previousPaid);
 
