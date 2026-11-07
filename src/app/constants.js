@@ -53,7 +53,7 @@ export const FONTS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 `;
 
-export const BUSINESS_NAME = "A2D'Elites";
+export const BUSINESS_NAME = "A2D Elites";
 export const BUSINESS_TAGLINE = "Since 2025";
 export const BUSINESS_ADDRESS = "PLOT NO. 133 & 134, ASHOK METROVARAM, RAJIV GANDHI NAGAR, SIRUNGAVUR, Chennai, TAMIL NADU, 600097";
 export const BUSINESS_PHONE = "+919894886693";

@@ -3,6 +3,8 @@ import { useMemo, useState } from "react";
 import { C } from "../../app/constants";
 import { addDays, fmtDateShort, monthKey, todayStr } from "../../app/helpers";
 import { Chip, SelectChip, TopBar } from "../../components/Shared";
+import { Dialog } from "@capacitor/dialog";
+import { getSelectableDeliveryOrders } from "./ordersTabUtils";
 
 
 export default function OrdersTab({
@@ -11,6 +13,8 @@ export default function OrdersTab({
   onEdit,
   onDelete,
   onMarkDelivered,
+  onBulkMarkDelivered,
+  onStartDelivery,
   onMarkPaid,
   OrderRow,
   userSession,
@@ -22,6 +26,7 @@ export default function OrdersTab({
   const [filterProduct, setFilterProduct] = useState("All");
   const [range, setRange] = useState(isDelivery ? "today" : "all");
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [bulkError, setBulkError] = useState("");
 
   const filtered = useMemo(() => {
     let list = [...data.orders].sort((a, b) =>
@@ -30,11 +35,12 @@ export default function OrdersTab({
 
     // Filter by delivery boy if assigned
     if (isDelivery && userSession?.deliveryBoyId) {
-      const assigned = list.filter((o) => o.deliveryBoyId === userSession.deliveryBoyId);
-      // If there are specific assigned orders, filter to them; otherwise show all today's orders for testing
-      if (assigned.length > 0) {
-        list = assigned;
-      }
+      list = list.filter(
+        (order) =>
+          String(order.deliveryBoyId || "") ===
+            String(userSession.deliveryBoyId) ||
+          (!order.deliveryBoyId && order.orderStatus === "Pending"),
+      );
     }
 
     const today = todayStr();
@@ -84,12 +90,20 @@ export default function OrdersTab({
   // Bulk selection
   // -----------------------------
 
-  const selectableOrders = filtered.filter(
-    (order) =>
-      order.paymentStatus !== "Paid" && order.orderStatus !== "Cancelled",
+  const selectableOrders = getSelectableDeliveryOrders(
+    filtered,
+    isDelivery,
+    userSession?.deliveryBoyId,
   );
+  const selectedOrders = selectableOrders.filter((order) =>
+    selectedOrderIds.includes(order.id),
+  );
+  const unpaidSelectedOrders = isDelivery
+    ? []
+    : selectedOrders.filter((order) => order.paymentStatus !== "Paid");
 
   const toggleOrderSelection = (orderId) => {
+    setBulkError("");
     setSelectedOrderIds((prev) =>
       prev.includes(orderId)
         ? prev.filter((id) => id !== orderId)
@@ -97,34 +111,53 @@ export default function OrdersTab({
     );
   };
 
-  const selectAllUnpaid = () => {
-    const unpaidIds = selectableOrders.map((order) => order.id);
-
-    setSelectedOrderIds(unpaidIds);
+  const selectAllEligible = () => {
+    setSelectedOrderIds(selectableOrders.map((order) => order.id));
   };
 
   const clearSelection = () => {
     setSelectedOrderIds([]);
+    setBulkError("");
   };
 
-  const allUnpaidSelected =
+  const allEligibleSelected =
     selectableOrders.length > 0 &&
     selectableOrders.every((order) => selectedOrderIds.includes(order.id));
 
   const handleSelectAll = () => {
-    if (allUnpaidSelected) {
+    if (allEligibleSelected) {
       clearSelection();
     } else {
-      selectAllUnpaid();
+      selectAllEligible();
     }
   };
 
   const handleBulkMarkPaid = () => {
-    selectedOrderIds.forEach((id) => {
+    unpaidSelectedOrders.forEach((order) => {
+      const { id } = order;
       onMarkPaid(id);
     });
+    clearSelection();
+  };
 
-    setSelectedOrderIds([]);
+  const handleBulkMarkDelivered = async () => {
+    if (selectedOrders.length === 0) return;
+
+    try {
+      const { value } = await Dialog.confirm({
+        title: "Mark selected orders delivered?",
+        message: `This will mark ${selectedOrders.length} order(s) delivered and record the delivery time. Payment, returned bottles, and customer balances will not change.`,
+        okButtonTitle: "Mark Delivered",
+        cancelButtonTitle: "Cancel",
+      });
+
+      if (!value) return;
+      await onBulkMarkDelivered(selectedOrders.map((order) => order.id));
+      clearSelection();
+    } catch (error) {
+      console.error("Bulk delivery update failed:", error);
+      setBulkError(error.message || "Unable to mark the selected orders delivered.");
+    }
   };
 
   return (
@@ -172,7 +205,11 @@ export default function OrdersTab({
 
           <input
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelectedOrderIds([]);
+              setBulkError("");
+            }}
             placeholder="Search customer or phone"
             style={{
               width: "100%",
@@ -204,6 +241,7 @@ export default function OrdersTab({
               onClick={() => {
                 setRange(value);
                 setSelectedOrderIds([]);
+                setBulkError("");
               }}
               label={
                 {
@@ -232,8 +270,15 @@ export default function OrdersTab({
             onChange={(value) => {
               setFilterStatus(value);
               setSelectedOrderIds([]);
+              setBulkError("");
             }}
-            options={["All", "Pending", "Delivered", "Cancelled"]}
+            options={[
+              "All",
+              "Pending",
+              "Out for Delivery",
+              "Delivered",
+              "Cancelled",
+            ]}
           />
 
           <SelectChip
@@ -241,6 +286,7 @@ export default function OrdersTab({
             onChange={(value) => {
               setFilterPay(value);
               setSelectedOrderIds([]);
+              setBulkError("");
             }}
             options={["All", "Paid", "Pending", "Partial"]}
           />
@@ -250,6 +296,7 @@ export default function OrdersTab({
             onChange={(value) => {
               setFilterProduct(value);
               setSelectedOrderIds([]);
+              setBulkError("");
             }}
             options={["All", "Milk", "Paneer", "Curd"]}
           />
@@ -278,7 +325,7 @@ export default function OrdersTab({
                 padding: "7px 0",
               }}
             >
-              {allUnpaidSelected ? "Deselect all" : "Select all unpaid"}
+              {allEligibleSelected ? "Deselect all" : "Select all eligible"}
             </button>
 
             {selectedOrderIds.length > 0 && (
@@ -297,6 +344,18 @@ export default function OrdersTab({
                 Clear selection
               </button>
             )}
+          </div>
+        )}
+        {bulkError && (
+          <div
+            role="alert"
+            style={{
+              color: C.brick,
+              fontSize: 12,
+              padding: "4px 0",
+            }}
+          >
+            {bulkError}
           </div>
         )}
       </div>
@@ -324,8 +383,9 @@ export default function OrdersTab({
         )}
 
         {filtered.map((order) => {
-          const canSelect =
-            order.paymentStatus !== "Paid" && order.orderStatus !== "Cancelled";
+          const canSelect = selectableOrders.some(
+            (selectableOrder) => selectableOrder.id === order.id,
+          );
 
           const isSelected = selectedOrderIds.includes(order.id);
 
@@ -356,7 +416,7 @@ export default function OrdersTab({
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => toggleOrderSelection(order.id)}
-                    aria-label={`Select ${order.customerName}`}
+                    aria-label={`Select order ${order.id}`}
                     style={{
                       width: 18,
                       height: 18,
@@ -386,9 +446,12 @@ export default function OrdersTab({
                     order={order}
                     actions={{
                       markDelivered: onMarkDelivered,
+                      markOutForDelivery: onStartDelivery,
                       markPaid: onMarkPaid,
                       edit: onEdit,
                       del: onDelete,
+                      isDelivery,
+                      deliveryBoyId: userSession?.deliveryBoyId,
                     }}
                     data={data}
                   />
@@ -400,7 +463,7 @@ export default function OrdersTab({
       </div>
 
       {/* Bulk action bar */}
-      {selectedOrderIds.length > 0 && (
+      {selectedOrders.length > 0 && (
         <div
           style={{
             position: "fixed",
@@ -429,7 +492,7 @@ export default function OrdersTab({
                 fontWeight: 700,
               }}
             >
-              {selectedOrderIds.length} selected
+              {selectedOrders.length} selected
             </div>
 
             <div
@@ -439,27 +502,55 @@ export default function OrdersTab({
                 marginTop: 2,
               }}
             >
-              Unpaid orders
+              Delivery status only
             </div>
           </div>
 
-          <button
-            type="button"
-            className="tap"
-            onClick={handleBulkMarkPaid}
+          <div
             style={{
-              border: "none",
-              background: "#fff",
-              color: C.primaryDark,
-              borderRadius: 11,
-              padding: "10px 14px",
-              fontWeight: 700,
-              fontSize: 12.5,
-              cursor: "pointer",
+              display: "flex",
+              gap: 6,
+              flexWrap: "wrap",
+              justifyContent: "flex-end",
             }}
           >
-            ✓ Mark Paid
-          </button>
+            {!isDelivery && unpaidSelectedOrders.length > 0 && (
+              <button
+                type="button"
+                className="tap"
+                onClick={handleBulkMarkPaid}
+                style={{
+                  border: "none",
+                  background: "#fff",
+                  color: C.primaryDark,
+                  borderRadius: 11,
+                  padding: "10px 12px",
+                  fontWeight: 700,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                ✓ Mark {unpaidSelectedOrders.length} paid
+              </button>
+            )}
+            <button
+              type="button"
+              className="tap"
+              onClick={handleBulkMarkDelivered}
+              style={{
+                border: "none",
+                background: "#fff",
+                color: C.primaryDark,
+                borderRadius: 11,
+                padding: "10px 12px",
+                fontWeight: 700,
+                fontSize: 12,
+                cursor: "pointer",
+              }}
+            >
+              ✓ Mark Delivered
+            </button>
+          </div>
         </div>
       )}
 

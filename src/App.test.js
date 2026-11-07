@@ -15,6 +15,6 @@ jest.mock('./billing', () => ({
 
 test('renders dairy app header', () => {
   render(<App />);
-  const headerElement = screen.getByText(/A2D'Elites/i);
+  const headerElement = screen.getByText(/A2D Elites/i);
   expect(headerElement).toBeInTheDocument();
 });

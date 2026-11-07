@@ -1,7 +1,5 @@
 import logo1 from "../assets/logo1.png";
-import signatureImg from "../assets/signature.png";
 import html2pdf from "html2pdf.js";
-import qrImg from "../assets/payment-qr.jpeg";
 // import { ThemeProvider, useTheme } from "./app/ThemeContext";
 
 import { Directory, Filesystem } from "@capacitor/filesystem";
@@ -22,6 +20,10 @@ import {
   fmtINR,
   fmtDate,
 } from "../app/helpers";
+
+const signatureImg = "";
+const qrImg = "";
+
 /* ============================== PDF / BILL GENERATION ============================== */
 
 /* -------------------------------------------------------------------------- */

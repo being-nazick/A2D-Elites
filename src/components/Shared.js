@@ -112,7 +112,7 @@ export function TopBar({ title, subtitle, right }) {
 }
 
 export function StatusPill({ status, kind }) {
-  const map = { order: { Pending: [C.gold, C.goldSoft], Delivered: [C.green, C.greenSoft], Cancelled: [C.inkMute, C.cream] }, pay: { Pending: [C.brick, C.brickSoft], Paid: [C.green, C.greenSoft], Partial: [C.gold, C.goldSoft] } };
+  const map = { order: { Pending: [C.gold, C.goldSoft], "Out for Delivery": [C.primary, C.primarySoft], Delivered: [C.green, C.greenSoft], Cancelled: [C.inkMute, C.cream] }, pay: { Pending: [C.brick, C.brickSoft], Paid: [C.green, C.greenSoft], Partial: [C.gold, C.goldSoft] } };
   const [color, background] = (map[kind] || map.order)[status] || [C.inkMute, C.cream];
   return <span style={{ fontSize: 11, fontWeight: 700, color, background, padding: "3px 9px", borderRadius: 20, whiteSpace: "nowrap" }}>{status}</span>;
 }

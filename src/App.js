@@ -46,6 +46,8 @@ import {
   weekdayShort,
  } from "./app/constants";
 import { useCapacitorStorage } from "./app/storage";
+import { useSupabaseSync } from "./app/useSupabaseSync";
+import { markSelectedOrdersDelivered } from "./features/orders/ordersTabUtils";
 import {
   uid,
   todayStr,
@@ -69,6 +71,7 @@ import {
   StatusPill,
 } from "./components/Shared";
 import ImportExportModal from "./components/ImportExportModal";
+import SupabaseSyncPanel from "./components/SupabaseSyncPanel";
 
 import LocationPicker from "./components/LocationPicker";
 // import LoginScreen from "./components/LoginScreen";
@@ -223,11 +226,17 @@ export default function App() {
     "business-data",
     EMPTY_DATA,
   );
-  const [userSession, setUserSession] = useCapacitorStorage(
+  const [localUserSession, setLocalUserSession] = useCapacitorStorage(
     "user-session",
     null,
   );
+  const supabaseSync = useSupabaseSync({ data, setData, isLocalLoaded: isLoaded });
+  const userSession = supabaseSync.isConfigured
+    ? supabaseSync.appSession
+    : localUserSession;
   const [tab, setTab] = useState("dashboard");
+  const activeTab =
+    userSession?.role === "delivery" && tab !== "more" ? "orders" : tab;
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [orderModal, setOrderModal] = useState(null); // { order?, prefillCustomer? } or null
   const [custModal, setCustModal] = useState(null);
@@ -242,14 +251,23 @@ export default function App() {
       setData((currentData) => generateRecurringForToday(currentData));
   }, [isLoaded, setData]);
 
-  // RBAC: Delivery role tab redirection (commented out)
-  /*
   useEffect(() => {
     if (userSession?.role === "delivery" && tab !== "orders" && tab !== "more") {
       setTab("orders");
     }
   }, [userSession, tab]);
-  */
+
+  useEffect(() => {
+    if (userSession?.role === "delivery") {
+      setMoreView("menu");
+      setImportExportModalOpen(false);
+      setOrderModal(null);
+      setCustModal(null);
+      setRecurModal(null);
+      setReturnModalOrder(null);
+      setActiveCustomer(null);
+    }
+  }, [userSession?.role]);
 
   function update(mutator) {
     setData((prev) => {
@@ -297,10 +315,47 @@ export default function App() {
   }
 
   function markDelivered(id) {
+    if (userSession?.role === "delivery") {
+      supabaseSync.updateDriverStatus(id, "Delivered");
+      return;
+    }
     const order = data.orders.find((item) => item.id === id);
     if (!order) return;
     // Open unified delivery modal for all orders
     setReturnModalOrder(order);
+  }
+
+  function markOrdersDelivered(orderIds) {
+    const selectedIds = new Set(orderIds.map(String));
+
+    if (userSession?.role === "delivery") {
+      data.orders
+        .filter(
+          (order) =>
+            selectedIds.has(String(order.id)) &&
+            String(order.deliveryBoyId || "") ===
+              String(userSession.deliveryBoyId || "") &&
+            order.orderStatus === "Out for Delivery",
+        )
+        .forEach((order) =>
+          supabaseSync.updateDriverStatus(order.id, "Delivered"),
+        );
+      return;
+    }
+
+    const deliveredAt = new Date().toISOString();
+    update((d) => {
+      d.orders = markSelectedOrdersDelivered(
+        d.orders,
+        Array.from(selectedIds),
+        deliveredAt,
+      );
+      return d;
+    });
+  }
+
+  function startDelivery(id) {
+    supabaseSync.updateDriverStatus(id, "Out for Delivery");
   }
 
   function confirmDelivery(payload, maybeBottles) {
@@ -490,20 +545,27 @@ export default function App() {
     (o) => o.paymentStatus !== "Paid" && o.orderStatus !== "Cancelled",
   ).length;
 
-  // RBAC: Login Screen gating (commented out for now)
-  /*
-  if (isLoaded && isSessionLoaded && !userSession) {
+  if (supabaseSync.isConfigured && !supabaseSync.authReady) {
     return (
-      <LoginScreen
-        onLogin={(session) => {
-          setUserSession(session);
-          if (session.role === "delivery") setTab("orders");
-        }}
-        deliveryBoys={data.deliveryBoys || []}
+      <div role="status" style={{ padding: 32, textAlign: "center", color: C.inkMute }}>
+        Connecting to Supabase…
+      </div>
+    );
+  }
+
+  if (
+    supabaseSync.isConfigured &&
+    supabaseSync.authReady &&
+    (!supabaseSync.session || !supabaseSync.appSession)
+  ) {
+    return (
+      <SupabaseSyncPanel
+        sync={supabaseSync}
+        showBack={false}
+        onBack={() => {}}
       />
     );
   }
-  */
 
   return (
     <div
@@ -527,8 +589,16 @@ export default function App() {
         `}</style>
 
       <div style={{ maxWidth: 480, margin: "0 auto", position: "relative" }}>
-        <SharedAppHeader logo={logoIcon} userSession={userSession} onLogout={() => setUserSession(null)} />
-        {tab === "dashboard" && (
+        <SharedAppHeader
+          logo={logoIcon}
+          userSession={userSession}
+          onLogout={
+            supabaseSync.isConfigured
+              ? supabaseSync.signOut
+              : () => setLocalUserSession(null)
+          }
+        />
+        {activeTab === "dashboard" && (
           <DashboardTab
             data={data}
             selectedDate={selectedDate}
@@ -549,19 +619,21 @@ export default function App() {
             navBtnStyle={navBtnStyle}
           />
         )}
-        {tab === "orders" && (
+        {activeTab === "orders" && (
           <OrdersTab
             data={data}
             onAdd={() => setOrderModal({})}
             onEdit={(o) => setOrderModal({ order: o })}
             onDelete={deleteOrder}
             onMarkDelivered={markDelivered}
+            onBulkMarkDelivered={markOrdersDelivered}
+            onStartDelivery={startDelivery}
             onMarkPaid={markPaid}
             OrderRow={OrderRow}
             userSession={userSession}
           />
         )}
-        {tab === "customers" && (
+        {activeTab === "customers" && (
           <CustomersTab
             data={data}
             activeCustomer={activeCustomer}
@@ -574,8 +646,8 @@ export default function App() {
             onClearBottleBalance={clearCustomerBottleBalance}
           />
         )}
-        {tab === "reports" && <ReportsTab data={data} />}
-        {tab === "more" && (
+        {activeTab === "reports" && <ReportsTab data={data} />}
+        {activeTab === "more" && (
           <MoreTab
             view={moreView}
             setView={setMoreView}
@@ -587,11 +659,18 @@ export default function App() {
             onOpenImportExport={() => setImportExportModalOpen(true)}
             pendingDeliveries={pendingDeliveries}
             pendingPayments={pendingPayments}
+            supabaseSync={supabaseSync}
+            userSession={userSession}
           />
         )}
       </div>
 
-      <SharedBottomNav tab={tab} setTab={setTab} badge={pendingDeliveries} role="owner" /* RBAC disabled: show all tabs */ />
+      <SharedBottomNav
+        tab={activeTab}
+        setTab={setTab}
+        badge={pendingDeliveries}
+        role={userSession?.role === "delivery" ? "delivery" : "owner"}
+      />
 
       {orderModal && (
         <OrderModal
@@ -599,6 +678,7 @@ export default function App() {
           prefillCustomer={orderModal.prefillCustomer}
           products={data.products}
           customers={data.customers}
+          drivers={supabaseSync.drivers}
           onClose={() => setOrderModal(null)}
           onSave={(o) => {
             upsertOrder(o);
@@ -788,55 +868,81 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
           paddingTop: 4,
         }}
       >
-        {order.orderStatus === "Pending" && (
-          <ActionBtn
-            onClick={() => actions.markDelivered(order.id)}
-            icon={CheckCircle2}
-            label="Delivered"
-            tone={C.green}
-            toneSoft={C.greenSoft}
-          />
+        {actions.isDelivery ? (
+          String(order.deliveryBoyId || "") ===
+            String(actions.deliveryBoyId || "") && (
+            <>
+              {order.orderStatus === "Pending" && (
+                <ActionBtn
+                  onClick={() => actions.markOutForDelivery(order.id)}
+                  icon={Route}
+                  label="Start delivery"
+                  tone={C.primary}
+                  toneSoft={C.primarySoft}
+                />
+              )}
+              {order.orderStatus === "Out for Delivery" && (
+                <ActionBtn
+                  onClick={() => actions.markDelivered(order.id)}
+                  icon={CheckCircle2}
+                  label="Delivered"
+                  tone={C.green}
+                  toneSoft={C.greenSoft}
+                />
+              )}
+            </>
+          )
+        ) : (
+          <>
+            {order.orderStatus === "Pending" && (
+              <ActionBtn
+                onClick={() => actions.markDelivered(order.id)}
+                icon={CheckCircle2}
+                label="Delivered"
+                tone={C.green}
+                toneSoft={C.greenSoft}
+              />
+            )}
+            {order.paymentStatus !== "Paid" && (
+              <ActionBtn
+                onClick={() => actions.markPaid(order.id)}
+                icon={Wallet}
+                label="Mark Paid"
+                tone={C.gold}
+                toneSoft={C.goldSoft}
+              />
+            )}
+            <ActionBtn
+              onClick={() => generateBill(order, data.orders, data.customers)}
+              icon={Download}
+              label="Bill"
+              tone={C.primary}
+              toneSoft={C.primarySoft}
+            />
+            <ActionBtn
+              onClick={() => actions.edit(order)}
+              icon={Edit2}
+              label="Edit"
+              tone={C.inkMute}
+              toneSoft={C.cream}
+            />
+            <ActionBtn
+              onClick={async () => {
+                const { value } = await Dialog.confirm({
+                  title: "Delete Order",
+                  message: "Delete this order?",
+                  okButtonTitle: "Delete",
+                  cancelButtonTitle: "Cancel",
+                });
+                if (value) actions.del(order.id);
+              }}
+              icon={Trash2}
+              label="Delete"
+              tone={C.brick}
+              toneSoft={C.brickSoft}
+            />
+          </>
         )}
-        {order.paymentStatus !== "Paid" && (
-          <ActionBtn
-            onClick={() => actions.markPaid(order.id)}
-            icon={Wallet}
-            label="Mark Paid"
-            tone={C.gold}
-            toneSoft={C.goldSoft}
-          />
-        )}
-        <ActionBtn
-          onClick={() => generateBill(order, data.orders, data.customers)}
-          icon={Download}
-          label="Bill"
-          tone={C.primary}
-          toneSoft={C.primarySoft}
-        />
-        <ActionBtn
-          onClick={() => actions.edit(order)}
-          icon={Edit2}
-          label="Edit"
-          tone={C.inkMute}
-          toneSoft={C.cream}
-        />
-        <ActionBtn
-          onClick={async () => {
-            const { value } = await Dialog.confirm({
-              title: "Delete Order",
-              message: "Delete this order?",
-              okButtonTitle: "Delete",
-              cancelButtonTitle: "Cancel",
-            });
-            if (value) {
-              actions.del(order.id);
-            }
-          }}
-          icon={Trash2}
-          label="Delete"
-          tone={C.brick}
-          toneSoft={C.brickSoft}
-        />
       </div>
     </div>
   );
@@ -2649,7 +2755,16 @@ function MoreTab({
   onOpenImportExport,
   pendingDeliveries,
   pendingPayments,
+  supabaseSync,
+  userSession,
 }) {
+  if (
+    userSession?.role === "delivery" &&
+    view !== "menu" &&
+    view !== "cloud-sync"
+  ) {
+    return null;
+  }
   if (view === "products")
     return (
       <ProductsView
@@ -2670,8 +2785,10 @@ function MoreTab({
     );
   if (view === "notifications")
     return <NotificationsView data={data} onBack={() => setView("menu")} />;
+  if (view === "cloud-sync")
+    return <SupabaseSyncPanel sync={supabaseSync} onBack={() => setView("menu")} />;
 
-  const items = [
+  const ownerItems = [
     {
       id: "products",
       label: "Products & Pricing",
@@ -2696,7 +2813,17 @@ function MoreTab({
       desc: "Backup & restore app data",
       icon: "📤",
     },
+    {
+      id: "cloud-sync",
+      label: "Cloud Sync",
+      desc: "Connect a Supabase account",
+      icon: "☁️",
+    },
 ];
+  const items =
+    userSession?.role === "delivery"
+      ? ownerItems.filter((item) => item.id === "cloud-sync")
+      : ownerItems;
   return (
     <div>
       <SharedTopBar title="More" subtitle="Settings & tools" />
@@ -3450,6 +3577,7 @@ function OrderModal({
   prefillCustomer,
   products,
   customers,
+  drivers = [],
   onClose,
   onSave,
 }) {
@@ -3491,6 +3619,9 @@ function OrderModal({
   const [amountPaid, setAmountPaid] = useState(initial?.amountPaid || 0);
   const [orderStatus, setOrderStatus] = useState(
     initial?.orderStatus || "Pending",
+  );
+  const [deliveryBoyId, setDeliveryBoyId] = useState(
+    initial?.deliveryBoyId || "",
   );
   const [notes, setNotes] = useState(initial?.notes || "");
   const [bottlesReturned, setBottlesReturned] = useState(
@@ -3594,6 +3725,9 @@ function OrderModal({
       paymentStatus,
       amountPaid: safeAmountPaid,
       orderStatus,
+      deliveryBoyId,
+      deliveryBoyName:
+        drivers.find((driver) => driver.id === deliveryBoyId)?.name || "",
       notes,
       total,
       bottlesReturned: Number(bottlesReturned) || 0,
@@ -3959,6 +4093,21 @@ function OrderModal({
         </div>
       </div>
 
+      <Field label="Assigned delivery driver">
+        <select
+          style={inputStyle}
+          value={deliveryBoyId}
+          onChange={(event) => setDeliveryBoyId(event.target.value)}
+        >
+          <option value="">Unassigned</option>
+          {drivers.map((driver) => (
+            <option key={driver.id} value={driver.id}>
+              {driver.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+
       <div style={{ display: "flex", gap: 10 }}>
         <div style={{ flex: 1 }}>
           <Field label="Order Status">
@@ -3968,6 +4117,7 @@ function OrderModal({
               onChange={(e) => setOrderStatus(e.target.value)}
             >
               <option>Pending</option>
+              <option>Out for Delivery</option>
               <option>Delivered</option>
               <option>Cancelled</option>
             </select>

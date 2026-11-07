@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useRef } from "react";
 import { Download, Upload, CheckCircle, X, AlertCircle } from "lucide-react";
 import { C } from "../app/constants";
+import { mergeBackupData } from "./importExportUtils";
 import { Filesystem, Directory, Encoding } from "@capacitor/filesystem";
 import { Dialog } from "@capacitor/dialog";
 import { Capacitor } from "@capacitor/core";
@@ -11,6 +12,7 @@ export default function ImportExportModal({ isOpen, onClose, data, setData }) {
   const [importing, setImporting] = useState(false);
   const [status, setStatus] = useState(null); // { type: 'success'|'error', message }
   const fileInputRef = useRef(null);
+  const importModeRef = useRef("replace");
 
   const dismissStatus = () => setStatus(null);
 
@@ -93,15 +95,27 @@ export default function ImportExportModal({ isOpen, onClose, data, setData }) {
 
       const confirm = await Dialog.confirm({
         title: "Import Data",
-        message: "This will replace all current app data. Continue?",
-        okButtonTitle: "Import",
+        message:
+          importModeRef.current === "merge"
+            ? "Merge this backup with current data? Duplicate customers and orders will be skipped. Orders linked by customer ID are retained if their phone differs and flagged for review."
+            : "This will replace all current app data. Continue?",
+        okButtonTitle: importModeRef.current === "merge" ? "Merge" : "Replace",
         cancelButtonTitle: "Cancel",
       });
 
       if (!confirm.value) return;
 
-      setData(parsed.data);
-      setStatus({ type: "success", message: "Data imported successfully" });
+      if (importModeRef.current === "merge") {
+        const { data: mergedData, stats } = mergeBackupData(data, parsed.data);
+        setData(mergedData);
+        setStatus({
+          type: "success",
+          message: `Data merged. Removed ${stats.duplicateCustomerCount} duplicate customer(s) and ${stats.duplicateOrderCount} duplicate order(s); flagged ${stats.phoneMismatchCount} phone mismatch(es) for review and skipped ${stats.invalidOrderCount} order(s) without a matching customer ID or phone.`,
+        });
+      } else {
+        setData(parsed.data);
+        setStatus({ type: "success", message: "Data imported successfully" });
+      }
     } catch (error) {
       console.error("Import error:", error);
       setStatus({ type: "error", message: "Import failed: " + error.message });
@@ -215,7 +229,10 @@ export default function ImportExportModal({ isOpen, onClose, data, setData }) {
             <button
               type="button"
               className="tap"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={() => {
+                importModeRef.current = "merge";
+                fileInputRef.current?.click();
+              }}
               disabled={importing}
               style={{
                 width: "100%",
@@ -236,9 +253,39 @@ export default function ImportExportModal({ isOpen, onClose, data, setData }) {
             >
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <Upload size={18} color={C.primary} />
-                <span>Import Data (JSON)</span>
+                <span>Merge Data (JSON)</span>
               </div>
               {importing && <span style={{ fontSize: 11, color: C.inkMute }}>Importing...</span>}
+            </button>
+            <button
+              type="button"
+              className="tap"
+              onClick={() => {
+                importModeRef.current = "replace";
+                fileInputRef.current?.click();
+              }}
+              disabled={importing}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                background: C.paper,
+                border: `1px solid ${C.paperLine}`,
+                borderRadius: 14,
+                padding: "14px 16px",
+                marginBottom: 16,
+                fontSize: 14,
+                fontWeight: 600,
+                color: C.ink,
+                gap: 10,
+                cursor: "pointer",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Upload size={18} color={C.primary} />
+                <span>Replace Data (JSON)</span>
+              </div>
             </button>
           </div>
 
