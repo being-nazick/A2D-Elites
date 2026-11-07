@@ -47,6 +47,7 @@ import {
  } from "./app/constants";
 import { useCapacitorStorage } from "./app/storage";
 import { useSupabaseSync } from "./app/useSupabaseSync";
+import { useDriverLocation } from "./app/useDriverLocation";
 import { markSelectedOrdersDelivered } from "./features/orders/ordersTabUtils";
 import {
   uid,
@@ -72,6 +73,7 @@ import {
 } from "./components/Shared";
 import ImportExportModal from "./components/ImportExportModal";
 import SupabaseSyncPanel from "./components/SupabaseSyncPanel";
+import DriverLocationView from "./components/DriverLocationView";
 
 import LocationPicker from "./components/LocationPicker";
 // import LoginScreen from "./components/LoginScreen";
@@ -231,6 +233,11 @@ export default function App() {
     null,
   );
   const supabaseSync = useSupabaseSync({ data, setData, isLocalLoaded: isLoaded });
+  const driverLocation = useDriverLocation({
+    membership: supabaseSync.membership,
+    session: supabaseSync.session,
+    syncReady: Boolean(supabaseSync.membership && supabaseSync.session),
+  });
   const userSession = supabaseSync.isConfigured
     ? supabaseSync.appSession
     : localUserSession;
@@ -592,11 +599,17 @@ export default function App() {
         <SharedAppHeader
           logo={logoIcon}
           userSession={userSession}
-          onLogout={
-            supabaseSync.isConfigured
-              ? supabaseSync.signOut
-              : () => setLocalUserSession(null)
-          }
+          onLogout={async () => {
+            if (userSession?.role === "delivery") {
+              const stopped = await driverLocation.stopSharing();
+              if (!stopped) return;
+            }
+            if (supabaseSync.isConfigured) {
+              await supabaseSync.signOut();
+            } else {
+              setLocalUserSession(null);
+            }
+          }}
         />
         {activeTab === "dashboard" && (
           <DashboardTab
@@ -661,6 +674,7 @@ export default function App() {
             pendingPayments={pendingPayments}
             supabaseSync={supabaseSync}
             userSession={userSession}
+            locationSharing={driverLocation}
           />
         )}
       </div>
@@ -2757,11 +2771,13 @@ function MoreTab({
   pendingPayments,
   supabaseSync,
   userSession,
+  locationSharing,
 }) {
   if (
     userSession?.role === "delivery" &&
     view !== "menu" &&
-    view !== "cloud-sync"
+    view !== "cloud-sync" &&
+    view !== "driver-location"
   ) {
     return null;
   }
@@ -2787,6 +2803,15 @@ function MoreTab({
     return <NotificationsView data={data} onBack={() => setView("menu")} />;
   if (view === "cloud-sync")
     return <SupabaseSyncPanel sync={supabaseSync} onBack={() => setView("menu")} />;
+  if (view === "driver-location")
+    return (
+      <DriverLocationView
+        userSession={userSession}
+        drivers={supabaseSync.drivers}
+        locationSharing={locationSharing}
+        onBack={() => setView("menu")}
+      />
+    );
 
   const ownerItems = [
     {
@@ -2819,10 +2844,24 @@ function MoreTab({
       desc: "Connect a Supabase account",
       icon: "☁️",
     },
+    {
+      id: "driver-location",
+      label: "Driver Locations",
+      desc: "View the latest shared delivery locations",
+      icon: "📍",
+    },
 ];
   const items =
     userSession?.role === "delivery"
-      ? ownerItems.filter((item) => item.id === "cloud-sync")
+      ? [
+          ...ownerItems.filter((item) => item.id === "cloud-sync"),
+          {
+            id: "driver-location",
+            label: "Shift Location Sharing",
+            desc: "Choose when to share your live location",
+            icon: "📍",
+          },
+        ]
       : ownerItems;
   return (
     <div>

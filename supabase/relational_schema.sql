@@ -117,12 +117,45 @@ create table public.recurring_orders (
     references public.customers (business_id, id)
 );
 
+create table public.driver_locations (
+  business_id uuid not null,
+  driver_id uuid not null,
+  latitude double precision not null check (latitude between -90 and 90),
+  longitude double precision not null check (longitude between -180 and 180),
+  accuracy double precision not null check (accuracy between 0 and 100),
+  captured_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (business_id, driver_id),
+  foreign key (business_id, driver_id)
+    references public.business_memberships (business_id, user_id)
+    on delete cascade
+);
+
 create index orders_driver_status_idx
   on public.orders (business_id, assigned_driver_id, delivery_status, delivery_date);
 create index orders_customer_date_idx
   on public.orders (business_id, customer_id, order_date desc);
 create index order_items_order_idx
   on public.order_items (business_id, order_id);
+create index driver_locations_business_updated_idx
+  on public.driver_locations (business_id, updated_at desc);
+
+create or replace function public.set_driver_location_updated_at()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+revoke all on function public.set_driver_location_updated_at()
+  from public, anon, authenticated;
+
+create trigger driver_locations_set_updated_at
+  before update on public.driver_locations
+  for each row execute function public.set_driver_location_updated_at();
 
 -- A trusted trigger creates only a profile. It never trusts role metadata.
 create or replace function public.handle_new_user()
@@ -208,6 +241,7 @@ alter table public.products enable row level security;
 alter table public.orders enable row level security;
 alter table public.order_items enable row level security;
 alter table public.recurring_orders enable row level security;
+alter table public.driver_locations enable row level security;
 
 create policy "Profiles are visible to self and business owners"
   on public.profiles for select to authenticated
@@ -291,6 +325,42 @@ create policy "Members can view items of visible orders"
     )
   );
 
+create policy "Owners can view driver locations"
+  on public.driver_locations for select to authenticated
+  using ((select public.has_business_role(business_id, 'owner')));
+
+create policy "Drivers can view their own location"
+  on public.driver_locations for select to authenticated
+  using (
+    driver_id = (select auth.uid())
+    and (select public.has_business_role(business_id, 'delivery_driver'))
+  );
+
+create policy "Drivers can insert their own location"
+  on public.driver_locations for insert to authenticated
+  with check (
+    driver_id = (select auth.uid())
+    and (select public.has_business_role(business_id, 'delivery_driver'))
+  );
+
+create policy "Drivers can update their own location"
+  on public.driver_locations for update to authenticated
+  using (
+    driver_id = (select auth.uid())
+    and (select public.has_business_role(business_id, 'delivery_driver'))
+  )
+  with check (
+    driver_id = (select auth.uid())
+    and (select public.has_business_role(business_id, 'delivery_driver'))
+  );
+
+create policy "Drivers can clear their own location"
+  on public.driver_locations for delete to authenticated
+  using (
+    driver_id = (select auth.uid())
+    and (select public.has_business_role(business_id, 'delivery_driver'))
+  );
+
 create policy "Owners can manage customers"
   on public.customers for all to authenticated
   using ((select public.has_business_role(business_id, 'owner')))
@@ -351,13 +421,16 @@ create trigger orders_validate_driver
 
 revoke all on public.profiles, public.businesses, public.business_memberships,
   public.business_settings, public.customers, public.products, public.orders,
-  public.order_items, public.recurring_orders from anon, authenticated;
+  public.order_items, public.recurring_orders, public.driver_locations
+  from anon, authenticated;
 grant select on public.profiles, public.businesses, public.business_memberships,
   public.business_settings, public.customers, public.products, public.orders,
-  public.order_items, public.recurring_orders to authenticated;
+  public.order_items, public.recurring_orders, public.driver_locations
+  to authenticated;
 grant insert, update, delete on public.customers, public.products, public.orders,
   public.order_items, public.business_settings, public.recurring_orders
   to authenticated;
+grant insert, update, delete on public.driver_locations to authenticated;
 grant usage, select on sequence public.order_items_id_seq to authenticated;
 
 create or replace function public.owner_save_order(

@@ -3,6 +3,7 @@ import App from './App';
 
 // Mock browser / native / ESM-specific dependencies during Jest
 jest.mock('./components/LocationPicker', () => () => <div data-testid="location-picker" />);
+jest.mock('./components/DriverLocationView', () => () => <div data-testid="driver-location-view" />);
 
 jest.mock('./features/invoiceService', () => ({
   generateBill: jest.fn().mockResolvedValue(undefined),

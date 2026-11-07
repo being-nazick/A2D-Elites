@@ -27,12 +27,18 @@ local data before signing in.
 
 In a new/test Supabase project, open **SQL Editor**, run
 [`../supabase/relational_schema.sql`](../supabase/relational_schema.sql) once,
-then provision the initial owner as described below. The script creates:
+then run
+[`../supabase/migrations/20261109_enable_relational_realtime.sql`](../supabase/migrations/20261109_enable_relational_realtime.sql)
+and
+[`../supabase/migrations/20261110_driver_locations.sql`](../supabase/migrations/20261110_driver_locations.sql)
+to enable Realtime publications. Then provision the initial owner as described
+below. The schema creates:
 
 - `profiles`: non-role profile information linked to `auth.users`.
 - `businesses` and `business_memberships`: tenant boundary and per-business
   `owner` / `delivery_driver` role.
 - `customers`, `products`, `orders`, and `order_items`.
+- `driver_locations`, which holds at most one current location per driver.
 - `business_settings`, which only an owner can read or update.
 - RLS policies and narrow RPCs for owner order writes and driver status updates.
 
@@ -48,10 +54,35 @@ and
 [`../supabase/migrations/20261108_relational_client_support.sql`](../supabase/migrations/20261108_relational_client_support.sql)
 and
 [`../supabase/migrations/20261109_enable_relational_realtime.sql`](../supabase/migrations/20261109_enable_relational_realtime.sql)
+and
+[`../supabase/migrations/20261110_driver_locations.sql`](../supabase/migrations/20261110_driver_locations.sql)
 in SQL Editor. These migrations add client fields/policies and enable
-business-scoped change events for customers, products, orders, order items, and
-recurring orders. Do not rerun the first-install schema against an existing
-project.
+business-scoped change events for customers, products, orders, order items,
+recurring orders, and driver locations. Do not rerun the first-install schema
+against an existing project.
+
+### Driver location sharing
+
+The driver location migration creates a table with one row per business and
+driver. RLS allows a driver to upsert/delete only their own row and lets an
+owner read locations for their business. Realtime refreshes the owner's map.
+The row is deleted when the driver stops sharing; if the phone is offline at
+that time, the app records a pending clear and retries on reconnect.
+
+Location sharing is explicitly started by the driver for a shift. Android uses
+a foreground location service with a persistent notification and sends a new
+point when the device moves at least about 50 metres. Low-accuracy fixes over
+100 metres are not uploaded. The owner sees the server update time and marks
+locations stale after five minutes. This is best-effort: GPS, network, OS
+battery controls, app force-stop, or an expired sign-in can interrupt updates.
+Only the latest point is retained; no route history is collected.
+
+The current native project is Android. After installing the app dependencies,
+run `npx cap sync android` and rebuild/reinstall the Android app so the
+background location and notification plugins are included. The browser build
+shares location only while open. iOS background sharing is not configured in
+this repository because it has no iOS native project; iOS usage descriptions
+and background location capability must be configured before enabling it.
 
 The SQL is a first-install schema, not a repeatable migration: it creates enum
 types. Test it in a development project and plan a data migration/backup before
