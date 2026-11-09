@@ -178,6 +178,11 @@ export default function DriverLocationView({
               ? "Latest shared locations for your delivery team"
               : "You control when your location is shared"}
           </div>
+          {isOwner && userSession?.businessId && (
+            <div style={{ ...metaTextStyle, wordBreak: "break-all" }}>
+              Business ID: {userSession.businessId}
+            </div>
+          )}
         </div>
         {isOwner ? <MapPinned size={20} color={C.primary} /> : <LocateFixed size={20} color={C.primary} />}
       </div>

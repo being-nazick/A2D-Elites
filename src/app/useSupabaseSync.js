@@ -9,6 +9,7 @@ import {
   mergeLocalWithRemote,
   normalizeAppData,
 } from "./relationalData";
+import { amountDue } from "./helpers";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
 
 const OUTBOX_PREFIX = "relational-outbox";
@@ -81,7 +82,7 @@ async function deleteBusinessRows(table, businessId, ids) {
   );
 }
 
-async function syncOwnerChanges(previous, next, businessId, driverIds) {
+async function syncOwnerChanges(previous, next, businessId, assignedUserIds) {
   const previousData = normalizeAppData(previous);
   const nextData = normalizeAppData(next);
   const deletedOrderIds = removedIds(previousData.orders, nextData.orders);
@@ -115,7 +116,7 @@ async function syncOwnerChanges(previous, next, businessId, driverIds) {
 
   const orders = changedItems(previousData.orders, nextData.orders);
   for (const order of orders) {
-    const mapped = mapOrderToRows(order, businessId, driverIds);
+    const mapped = mapOrderToRows(order, businessId, assignedUserIds);
     assertNoError(
       await supabase.rpc("owner_save_order", {
         p_business_id: mapped.order.business_id,
@@ -178,6 +179,7 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
   const [authBusy, setAuthBusy] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [syncReadyUserId, setSyncReadyUserId] = useState(null);
+  const sessionRestoreRef = useRef(0);
   const latestDataRef = useRef(data);
   const baselineDataRef = useRef(normalizeAppData(data));
 
@@ -186,24 +188,63 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
   useEffect(() => {
     if (!supabase) return undefined;
     let active = true;
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-      setMembership(null);
+    const restoreSession = async (nextSession) => {
+      const restoreId = ++sessionRestoreRef.current;
+      let cachedMembership = null;
+      let cachedBusinessName = "";
+
+      if (nextSession?.user?.id) {
+        try {
+          const { value } = await Preferences.get({
+            key: `${MEMBERSHIP_PREFIX}:${nextSession.user.id}`,
+          });
+          const cached = value ? JSON.parse(value) : null;
+          if (
+            cached?.user_id === nextSession.user.id &&
+            cached?.business_id &&
+            ["owner", "delivery_driver"].includes(cached.role)
+          ) {
+            cachedMembership = { ...cached, user: nextSession.user };
+            cachedBusinessName = cached.businessName || "";
+          }
+        } catch (error) {
+          console.error("Unable to restore cached Supabase membership:", error);
+        }
+      }
+
+      if (!active || restoreId !== sessionRestoreRef.current) return;
+      setMembership(cachedMembership);
+      setBusinessName(cachedBusinessName);
       setSyncReadyUserId(null);
+      setSession(nextSession);
       setSyncStatus(nextSession ? "connecting" : "signed-out");
       setSyncError("");
       setAuthError("");
       setAuthReady(true);
+    };
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      void restoreSession(nextSession);
     });
 
-    supabase.auth.getSession().then(({ data: sessionData, error }) => {
-      if (!active) return;
-      if (error) setAuthError(error.message);
-      setSession(sessionData?.session || null);
-      setAuthReady(true);
-    });
+    supabase.auth
+      .getSession()
+      .then(({ data: sessionData, error }) => {
+        if (error) {
+          console.error("Unable to restore Supabase auth session:", error);
+        }
+        return restoreSession(sessionData?.session || null).then(() => {
+          if (error && active) setAuthError(error.message);
+        });
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.error("Unable to restore Supabase auth session:", error);
+        setAuthError(error.message || "Unable to restore Supabase session.");
+        setAuthReady(true);
+      });
 
     return () => {
       active = false;
@@ -274,9 +315,27 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
           : [];
         const loadedDrivers = profileRows.map((profile) => ({
           id: profile.id,
-          name: profile.display_name || "Delivery driver",
+          name:
+            profile.display_name ||
+            (profile.id === userId
+              ? session.user.user_metadata?.display_name ||
+                session.user.email?.split("@")[0]
+              : "Unnamed driver"),
           phone: profile.phone || "",
         }));
+        const orderAssignees =
+          selectedMembership.role === "owner"
+            ? [
+                ...loadedDrivers,
+                {
+                  id: userId,
+                  name:
+                    session.user.user_metadata?.display_name ||
+                    session.user.email?.split("@")[0] ||
+                    "Owner",
+                },
+              ]
+            : loadedDrivers;
 
         const [customerRows, productRows, orderRows, itemRows, recurringRows] =
           await Promise.all([
@@ -302,7 +361,7 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
           orders: assertNoError(orderRows) || [],
           orderItems: assertNoError(itemRows) || [],
           recurring: assertNoError(recurringRows) || [],
-          drivers: loadedDrivers,
+          drivers: orderAssignees,
         });
 
         if (!active) return;
@@ -333,7 +392,7 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
             remoteData,
             mergedData,
             businessId,
-            new Set(loadedDrivers.map((driver) => driver.id)),
+            new Set([...loadedDrivers.map((driver) => driver.id), userId]),
           );
           baselineDataRef.current = mergedData;
         } else {
@@ -356,6 +415,7 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
           error.message?.includes("no business role") ||
           error.message?.includes("business could not be found")
         ) {
+          setMembership(null);
           setAuthError(error.message);
         }
       }
@@ -393,7 +453,10 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
           baselineDataRef.current,
           data,
           currentMembership.business_id,
-          new Set(drivers.map((driver) => driver.id)),
+          new Set([
+            ...drivers.map((driver) => driver.id),
+            session.user.id,
+          ]),
         );
         baselineDataRef.current = normalizeAppData(data);
         setSyncStatus("synced");
@@ -434,23 +497,35 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
       for (let index = 0; index < outbox.length; index += 1) {
         const operation = outbox[index];
         try {
-          const { error } = await supabase.rpc(
-            "driver_update_delivery_status",
-            {
-              p_business_id: operation.businessId,
-              p_order_id: operation.orderId,
-              p_status: operation.status,
-            },
-          );
+          const { error } =
+            operation.type === "payment"
+              ? await supabase.rpc("driver_record_order_payment", {
+                  p_business_id: operation.businessId,
+                  p_order_id: operation.orderId,
+                  p_payment_id: operation.paymentId,
+                  p_amount: operation.amount,
+                })
+              : operation.type === "delivery"
+                ? await supabase.rpc("driver_confirm_delivery", {
+                    p_business_id: operation.businessId,
+                    p_order_id: operation.orderId,
+                    p_bottles_returned: operation.bottlesReturned,
+                    p_delivered_by: operation.deliveredBy,
+                  })
+              : await supabase.rpc("driver_update_delivery_status", {
+                  p_business_id: operation.businessId,
+                  p_order_id: operation.orderId,
+                  p_status: operation.status,
+                });
           if (error) throw error;
         } catch (error) {
           remaining.push(...outbox.slice(index));
           if (navigator.onLine) {
             hasError = true;
-            console.error("Driver delivery update failed:", error);
+            console.error("Driver outbox operation failed:", error);
           }
           if (active && navigator.onLine) {
-            setSyncError(error.message || "Unable to update delivery status.");
+            setSyncError(error.message || "Unable to sync driver changes.");
             setSyncStatus("error");
           }
           break;
@@ -726,6 +801,43 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
     [membership?.business_id, membership?.role, session?.user?.email],
   );
 
+  const createDriverAccount = useCallback(
+    async ({ currentPassword, name, email, password }) => {
+      if (!supabase || membership?.role !== "owner") {
+        throw new Error("Owner access is required to create a delivery account.");
+      }
+      if (!name?.trim() || !email?.trim() || !password) {
+        throw new Error("Enter the driver's name, email, and password.");
+      }
+      if (password.length < 8) {
+        throw new Error("New passwords must be at least 8 characters.");
+      }
+
+      setAuthBusy(true);
+      try {
+        await reauthenticateUser(session?.user?.email, currentPassword);
+        const { error } = await supabase.functions.invoke(
+          "manage-driver-credentials",
+          {
+            body: {
+              action: "create",
+              businessId: membership.business_id,
+              name: name.trim(),
+              email: email.trim(),
+              password,
+            },
+          },
+        );
+        if (error) throw await getFunctionError(error);
+        setSyncReadyUserId(null);
+        setRetryCount((count) => count + 1);
+      } finally {
+        setAuthBusy(false);
+      }
+    },
+    [membership?.business_id, membership?.role, session?.user?.email],
+  );
+
   const updateDriverStatus = useCallback(
     (orderId, status) => {
       setData((current) => ({
@@ -745,6 +857,191 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
     [setData],
   );
 
+  const recordDriverPayment = useCallback(
+    async (orderId, amount, paymentId) => {
+      if (!supabase || membership?.role !== "delivery_driver" || !session?.user?.id) {
+        throw new Error("Delivery driver access is required to record payment.");
+      }
+
+      const amountInCents = Math.round(Number(amount) * 100);
+      if (
+        !Number.isFinite(amountInCents) ||
+        amountInCents <= 0 ||
+        Math.abs(Number(amount) * 100 - amountInCents) > 1e-8
+      ) {
+        throw new Error("Enter a valid payment amount in rupees and paise.");
+      }
+
+      const order = latestDataRef.current.orders.find(
+        (item) => String(item.id) === String(orderId),
+      );
+      if (
+        !order ||
+        String(order.deliveryBoyId || "") !== String(session.user.id) ||
+        amount > amountDue(order)
+      ) {
+        throw new Error(
+          "You can only collect up to the remaining balance on an order assigned to you.",
+        );
+      }
+
+      const operation = {
+        type: "payment",
+        businessId: membership.business_id,
+        orderId: String(orderId),
+        paymentId: String(paymentId),
+        amount: amountInCents / 100,
+      };
+      const enqueue = async () => {
+        const key = `${OUTBOX_PREFIX}:${session.user.id}:${membership.business_id}`;
+        const { value } = await Preferences.get({ key });
+        const outbox = value ? JSON.parse(value) : [];
+        if (!outbox.some((item) => item.paymentId === operation.paymentId)) {
+          outbox.push(operation);
+          await Preferences.set({ key, value: JSON.stringify(outbox) });
+        }
+        setData((current) => ({
+          ...current,
+          orders: current.orders.map((item) => {
+            if (String(item.id) !== operation.orderId) return item;
+            const amountPaid =
+              (item.customAmount !== undefined && item.customAmount !== null
+                ? Number(item.customAmount)
+                : Number(item.amountPaid) || 0) + operation.amount;
+            return {
+              ...item,
+              amountPaid,
+              ...(item.customAmount !== undefined && item.customAmount !== null
+                ? { customAmount: amountPaid }
+                : {}),
+              paymentStatus:
+                amountPaid >= Number(item.total) ? "Paid" : "Partial",
+            };
+          }),
+        }));
+        setSyncStatus("offline");
+        return { queued: true };
+      };
+
+      if (!navigator.onLine) return enqueue();
+
+      const { error } = await supabase.rpc("driver_record_order_payment", {
+        p_business_id: operation.businessId,
+        p_order_id: operation.orderId,
+        p_payment_id: operation.paymentId,
+        p_amount: operation.amount,
+      });
+      if (error) throw error;
+
+      setData((current) => ({
+        ...current,
+        orders: current.orders.map((item) => {
+          if (String(item.id) !== operation.orderId) return item;
+          const amountPaid =
+            (item.customAmount !== undefined && item.customAmount !== null
+              ? Number(item.customAmount)
+              : Number(item.amountPaid) || 0) + operation.amount;
+          return {
+            ...item,
+            amountPaid,
+            ...(item.customAmount !== undefined && item.customAmount !== null
+              ? { customAmount: amountPaid }
+              : {}),
+            paymentStatus:
+              amountPaid >= Number(item.total) ? "Paid" : "Partial",
+          };
+        }),
+      }));
+      setSyncError("");
+      setSyncStatus("synced");
+      return { queued: false };
+    },
+    [membership, session?.user?.id, setData],
+  );
+
+  const confirmDriverDelivery = useCallback(
+    async (orderId, bottlesReturned, deliveredBy) => {
+      if (!supabase || membership?.role !== "delivery_driver" || !session?.user?.id) {
+        throw new Error("Delivery driver access is required to complete an order.");
+      }
+      const count = Number(bottlesReturned);
+      if (!Number.isSafeInteger(count) || count < 0) {
+        throw new Error("Enter a valid non-negative bottle return count.");
+      }
+
+      const order = latestDataRef.current.orders.find(
+        (item) => String(item.id) === String(orderId),
+      );
+      if (
+        !order ||
+        String(order.deliveryBoyId || "") !== String(session.user.id) ||
+        order.orderStatus !== "Out for Delivery"
+      ) {
+        throw new Error("Only your assigned order that is out for delivery can be completed.");
+      }
+
+      const operation = {
+        type: "delivery",
+        businessId: membership.business_id,
+        orderId: String(orderId),
+        bottlesReturned: count,
+        deliveredBy: String(deliveredBy || "").trim().slice(0, 100),
+      };
+      if (navigator.onLine) {
+        const { error } = await supabase.rpc("driver_confirm_delivery", {
+          p_business_id: operation.businessId,
+          p_order_id: operation.orderId,
+          p_bottles_returned: operation.bottlesReturned,
+          p_delivered_by: operation.deliveredBy,
+        });
+        if (error) throw error;
+      } else {
+        const key = `${OUTBOX_PREFIX}:${session.user.id}:${membership.business_id}`;
+        const { value } = await Preferences.get({ key });
+        const outbox = value ? JSON.parse(value) : [];
+        if (
+          !outbox.some(
+            (item) =>
+              item.type === "delivery" && item.orderId === operation.orderId,
+          )
+        ) {
+          outbox.push(operation);
+          await Preferences.set({ key, value: JSON.stringify(outbox) });
+        }
+      }
+
+      const deliveredAt = new Date().toISOString();
+      const updateOrder = (item) =>
+        String(item.id) === operation.orderId
+          ? {
+              ...item,
+              orderStatus: "Delivered",
+              deliveredAt,
+              deliveredBy: operation.deliveredBy,
+              bottlesReturned: operation.bottlesReturned,
+            }
+          : item;
+      const nextData = {
+        ...latestDataRef.current,
+        orders: latestDataRef.current.orders.map(updateOrder),
+      };
+      latestDataRef.current = nextData;
+      baselineDataRef.current = {
+        ...baselineDataRef.current,
+        orders: baselineDataRef.current.orders.map(updateOrder),
+      };
+      setData(nextData);
+      if (navigator.onLine) {
+        setSyncError("");
+        setSyncStatus("synced");
+      } else {
+        setSyncStatus("offline");
+      }
+      return { queued: !navigator.onLine };
+    },
+    [membership, session?.user?.id, setData],
+  );
+
   const syncNow = useCallback(() => {
     if (session?.user?.id) {
       setSyncReadyUserId(null);
@@ -758,7 +1055,11 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
         email: session?.user?.email,
         name:
           session?.user?.user_metadata?.display_name ||
-          (membership.role === "owner" ? "Owner" : "Delivery driver"),
+          (membership.role === "owner"
+            ? "Owner"
+            : drivers.find((driver) => driver.id === session?.user?.id)?.name ||
+              session?.user?.email?.split("@")[0] ||
+              "Delivery driver"),
         role: membership.role === "delivery_driver" ? "delivery" : "owner",
         deliveryBoyId:
           membership.role === "delivery_driver" ? session?.user?.id : null,
@@ -766,6 +1067,9 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
         businessName,
       }
     : null;
+  const isSyncReady = Boolean(
+    session?.user?.id && syncReadyUserId === session.user.id,
+  );
 
   return {
     isConfigured: isSupabaseConfigured,
@@ -773,6 +1077,7 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
     session,
     membership,
     appSession,
+    isSyncReady,
     drivers,
     businessName,
     syncStatus,
@@ -783,7 +1088,10 @@ export function useSupabaseSync({ data, setData, isLocalLoaded }) {
     signOut,
     updateOwnCredentials,
     updateDriverCredentials,
+    createDriverAccount,
     syncNow,
     updateDriverStatus,
+    confirmDriverDelivery,
+    recordDriverPayment,
   };
 }

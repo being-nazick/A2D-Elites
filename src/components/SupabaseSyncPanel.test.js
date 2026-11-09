@@ -15,8 +15,52 @@ function createSync(role = "owner") {
     signOut: jest.fn(),
     updateOwnCredentials: jest.fn().mockResolvedValue({ emailChangePending: false }),
     updateDriverCredentials: jest.fn().mockResolvedValue(undefined),
+    createDriverAccount: jest.fn().mockResolvedValue(undefined),
   };
 }
+
+test("owner can create a delivery account", async () => {
+  const sync = createSync();
+  render(<SupabaseSyncPanel sync={sync} />);
+
+  const createForm = screen
+    .getByText("Create delivery account", { selector: "div" })
+    .closest("form");
+  fireEvent.change(within(createForm).getByLabelText("Driver name"), {
+    target: { value: "Mohan" },
+  });
+  fireEvent.change(within(createForm).getByLabelText("Driver email"), {
+    target: { value: "mohan@example.com" },
+  });
+  fireEvent.change(within(createForm).getByLabelText("Temporary password"), {
+    target: { value: "temporary-pass" },
+  });
+  fireEvent.change(
+    within(createForm).getByLabelText("Confirm temporary password"),
+    { target: { value: "temporary-pass" } },
+  );
+  fireEvent.change(
+    within(createForm).getByLabelText("Owner's current password"),
+    { target: { value: "owner-current" } },
+  );
+  fireEvent.click(
+    within(createForm).getByRole("button", {
+      name: "Create delivery account",
+    }),
+  );
+
+  await waitFor(() =>
+    expect(sync.createDriverAccount).toHaveBeenCalledWith({
+      currentPassword: "owner-current",
+      name: "Mohan",
+      email: "mohan@example.com",
+      password: "temporary-pass",
+    }),
+  );
+  expect(
+    await screen.findByText(/Delivery account created/),
+  ).toBeInTheDocument();
+});
 
 test("owner can submit a driver's new credentials", async () => {
   const sync = createSync();
@@ -90,4 +134,19 @@ test("delivery drivers cannot access owner credential management", () => {
 
   expect(screen.queryByText("Owner credentials")).not.toBeInTheDocument();
   expect(screen.queryByText("Delivery person credentials")).not.toBeInTheDocument();
+});
+
+test("password fields can be shown and hidden", () => {
+  const sync = createSync();
+  sync.session = null;
+  render(<SupabaseSyncPanel sync={sync} />);
+
+  const passwordInput = screen.getByLabelText("Password");
+  expect(passwordInput).toHaveAttribute("type", "password");
+
+  fireEvent.click(screen.getByRole("button", { name: "Show password" }));
+  expect(passwordInput).toHaveAttribute("type", "text");
+
+  fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+  expect(passwordInput).toHaveAttribute("type", "password");
 });

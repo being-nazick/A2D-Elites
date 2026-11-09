@@ -84,6 +84,56 @@ create table public.orders (
     references public.customers (business_id, id)
 );
 
+create table public.driver_payments (
+  business_id uuid not null,
+  id text not null,
+  order_id text not null,
+  driver_id uuid not null,
+  amount numeric(12, 2) not null check (amount > 0),
+  amount_paid_total numeric(12, 2) not null check (amount_paid_total > 0),
+  recorded_at timestamptz not null default now(),
+  primary key (business_id, id),
+  foreign key (business_id, order_id)
+    references public.orders (business_id, id) on delete cascade,
+  foreign key (business_id, driver_id)
+    references public.business_memberships (business_id, user_id)
+    on delete cascade
+);
+
+create index driver_payments_order_idx
+  on public.driver_payments (business_id, order_id);
+
+create or replace function public.preserve_driver_recorded_payments()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  recorded_total numeric(12, 2);
+begin
+  select max(dp.amount_paid_total)
+  into recorded_total
+  from public.driver_payments dp
+  where dp.business_id = new.business_id and dp.order_id = new.id;
+
+  if recorded_total is not null then
+    new.amount_paid := greatest(new.amount_paid, recorded_total);
+    new.payment_status := case
+      when new.amount_paid >= new.total then 'paid'::public.payment_status
+      else 'partial'::public.payment_status
+    end;
+  end if;
+
+  return new;
+end;
+$$;
+revoke all on function public.preserve_driver_recorded_payments() from public;
+
+create trigger orders_preserve_driver_recorded_payments
+  before update on public.orders
+  for each row execute function public.preserve_driver_recorded_payments();
+
 create table public.order_items (
   id bigint generated always as identity primary key,
   business_id uuid not null,
@@ -239,6 +289,7 @@ alter table public.business_settings enable row level security;
 alter table public.customers enable row level security;
 alter table public.products enable row level security;
 alter table public.orders enable row level security;
+alter table public.driver_payments enable row level security;
 alter table public.order_items enable row level security;
 alter table public.recurring_orders enable row level security;
 alter table public.driver_locations enable row level security;
@@ -403,7 +454,13 @@ begin
     from public.business_memberships as m
     where m.business_id = new.business_id
       and m.user_id = new.assigned_driver_id
-      and m.role = 'delivery_driver'
+      and (
+        m.role = 'delivery_driver'
+        or (
+          m.role = 'owner'
+          and m.user_id = (select auth.uid())
+        )
+      )
   ) then
     raise exception 'Assigned user is not a delivery driver in this business'
       using errcode = '22023';
@@ -421,7 +478,8 @@ create trigger orders_validate_driver
 
 revoke all on public.profiles, public.businesses, public.business_memberships,
   public.business_settings, public.customers, public.products, public.orders,
-  public.order_items, public.recurring_orders, public.driver_locations
+  public.driver_payments, public.order_items, public.recurring_orders,
+  public.driver_locations
   from anon, authenticated;
 grant select on public.profiles, public.businesses, public.business_memberships,
   public.business_settings, public.customers, public.products, public.orders,
@@ -473,7 +531,13 @@ begin
     select 1 from public.business_memberships m
     where m.business_id = p_business_id
       and m.user_id = p_assigned_driver_id
-      and m.role = 'delivery_driver'
+      and (
+        m.role = 'delivery_driver'
+        or (
+          m.role = 'owner'
+          and m.user_id = (select auth.uid())
+        )
+      )
   ) then
     raise exception 'Assigned user is not a driver in this business'
       using errcode = '22023';
@@ -656,6 +720,187 @@ begin
 end;
 $$;
 
+create or replace function public.driver_confirm_delivery(
+  p_business_id uuid,
+  p_order_id text,
+  p_bottles_returned integer,
+  p_delivered_by text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_status public.delivery_status;
+  current_metadata jsonb;
+  normalized_delivered_by text;
+begin
+  if not public.has_business_role(p_business_id, 'delivery_driver') then
+    raise exception 'Delivery driver role required' using errcode = '42501';
+  end if;
+  if p_bottles_returned is null or p_bottles_returned < 0 then
+    raise exception 'Returned bottle count must be a non-negative integer'
+      using errcode = '22023';
+  end if;
+
+  normalized_delivered_by := left(nullif(trim(p_delivered_by), ''), 100);
+  select o.delivery_status, o.metadata
+  into current_status, current_metadata
+  from public.orders o
+  where o.business_id = p_business_id
+    and o.id = p_order_id
+    and o.assigned_driver_id = (select auth.uid())
+  for update;
+
+  if not found then
+    raise exception 'Assigned order not found' using errcode = '42501';
+  end if;
+
+  if current_status = 'delivered'
+    and current_metadata ->> 'bottlesReturned' = p_bottles_returned::text
+    and current_metadata ->> 'deliveredBy' = normalized_delivered_by then
+    return;
+  end if;
+  if current_status <> 'out_for_delivery' then
+    raise exception 'Order must be out for delivery before it can be completed'
+      using errcode = '22023';
+  end if;
+
+  update public.orders
+  set delivery_status = 'delivered',
+      delivered_at = now(),
+      metadata = coalesce(current_metadata, '{}'::jsonb) || jsonb_build_object(
+        'bottlesReturned', p_bottles_returned,
+        'deliveredBy', coalesce(normalized_delivered_by, '')
+      ),
+      updated_at = now()
+  where business_id = p_business_id and id = p_order_id;
+end;
+$$;
+
+create or replace function public.driver_record_order_payment(
+  p_business_id uuid,
+  p_order_id text,
+  p_payment_id text,
+  p_amount numeric
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_paid numeric(12, 2);
+  current_total numeric(12, 2);
+  current_status public.delivery_status;
+  new_amount_paid numeric(12, 2);
+  existing_order_id text;
+  existing_driver_id uuid;
+  existing_amount numeric(12, 2);
+  inserted_payment_id text;
+begin
+  if not public.has_business_role(p_business_id, 'delivery_driver') then
+    raise exception 'Delivery driver role required' using errcode = '42501';
+  end if;
+
+  if nullif(trim(p_order_id), '') is null
+    or nullif(trim(p_payment_id), '') is null then
+    raise exception 'Order and payment IDs are required' using errcode = '22023';
+  end if;
+
+  if p_amount is null or p_amount <= 0 or p_amount <> round(p_amount, 2) then
+    raise exception 'Payment amount must be greater than zero with at most two decimals'
+      using errcode = '22023';
+  end if;
+
+  select dp.order_id, dp.driver_id, dp.amount
+  into existing_order_id, existing_driver_id, existing_amount
+  from public.driver_payments dp
+  where dp.business_id = p_business_id and dp.id = p_payment_id;
+  if found then
+    if existing_order_id <> p_order_id
+      or existing_driver_id <> (select auth.uid())
+      or existing_amount <> p_amount then
+      raise exception 'Payment ID was already used for a different payment'
+        using errcode = '22023';
+    end if;
+    return;
+  end if;
+
+  select o.amount_paid, o.total, o.delivery_status
+  into current_paid, current_total, current_status
+  from public.orders o
+  where o.business_id = p_business_id
+    and o.id = p_order_id
+    and o.assigned_driver_id = (select auth.uid())
+  for update;
+
+  if not found then
+    raise exception 'Assigned order not found' using errcode = '42501';
+  end if;
+
+  select dp.order_id, dp.driver_id, dp.amount
+  into existing_order_id, existing_driver_id, existing_amount
+  from public.driver_payments dp
+  where dp.business_id = p_business_id and dp.id = p_payment_id;
+  if found then
+    if existing_order_id <> p_order_id
+      or existing_driver_id <> (select auth.uid())
+      or existing_amount <> p_amount then
+      raise exception 'Payment ID was already used for a different payment'
+        using errcode = '22023';
+    end if;
+    return;
+  end if;
+
+  if current_status = 'cancelled' then
+    raise exception 'Cannot collect payment for a cancelled order'
+      using errcode = '22023';
+  end if;
+
+  if p_amount > current_total - current_paid then
+    raise exception 'Payment amount exceeds the remaining order balance'
+      using errcode = '22023';
+  end if;
+
+  new_amount_paid := current_paid + p_amount;
+  insert into public.driver_payments (
+    business_id, id, order_id, driver_id, amount, amount_paid_total
+  )
+  values (
+    p_business_id, p_payment_id, p_order_id, (select auth.uid()),
+    p_amount, new_amount_paid
+  )
+  on conflict (business_id, id) do nothing
+  returning id into inserted_payment_id;
+
+  if inserted_payment_id is null then
+    select dp.order_id, dp.driver_id, dp.amount
+    into existing_order_id, existing_driver_id, existing_amount
+    from public.driver_payments dp
+    where dp.business_id = p_business_id and dp.id = p_payment_id;
+    if not found
+      or existing_order_id <> p_order_id
+      or existing_driver_id <> (select auth.uid())
+      or existing_amount <> p_amount then
+      raise exception 'Payment ID was already used for a different payment'
+        using errcode = '22023';
+    end if;
+    return;
+  end if;
+
+  update public.orders
+  set amount_paid = new_amount_paid,
+      payment_status = case
+        when new_amount_paid >= current_total then 'paid'::public.payment_status
+        else 'partial'::public.payment_status
+      end,
+      updated_at = now()
+  where business_id = p_business_id and id = p_order_id;
+end;
+$$;
+
 revoke all on function public.owner_save_order(
   uuid, text, text, uuid, date, date, public.delivery_status,
   public.payment_status, numeric, text, jsonb, jsonb
@@ -666,6 +911,12 @@ revoke all on function public.owner_update_business_settings(uuid, jsonb) from p
 revoke all on function public.driver_update_delivery_status(
   uuid, text, public.delivery_status
 ) from public;
+revoke all on function public.driver_confirm_delivery(
+  uuid, text, integer, text
+) from public, anon;
+revoke all on function public.driver_record_order_payment(
+  uuid, text, text, numeric
+) from public, anon, authenticated;
 
 grant execute on function public.owner_save_order(
   uuid, text, text, uuid, date, date, public.delivery_status,
@@ -676,6 +927,12 @@ grant execute on function public.owner_cancel_order(uuid, text) to authenticated
 grant execute on function public.owner_update_business_settings(uuid, jsonb) to authenticated;
 grant execute on function public.driver_update_delivery_status(
   uuid, text, public.delivery_status
+) to authenticated;
+grant execute on function public.driver_confirm_delivery(
+  uuid, text, integer, text
+) to authenticated;
+grant execute on function public.driver_record_order_payment(
+  uuid, text, text, numeric
 ) to authenticated;
 
 -- Bootstrap owners only from the trusted Supabase SQL Editor / server. Replace

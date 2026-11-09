@@ -31,12 +31,11 @@ Before using cloud mode:
    secret key in a browser or mobile app.
 3. Create the owner's Supabase Auth account and add an `owner` membership to
    the A2D Elites business.
-4. Create each driver's Auth account and add a `delivery_driver` membership.
-   Account creation and role provisioning are administrator tasks; the app
-   does not provide an invite/new-driver form.
-5. To let the owner manage driver credentials inside the app, deploy the
-   `manage-driver-credentials` Supabase Edge Function as documented in
-   [`SUPABASE_SETUP.md`](./SUPABASE_SETUP.md).
+4. Deploy the `manage-driver-credentials` Supabase Edge Function as documented
+   in [`SUPABASE_SETUP.md`](./SUPABASE_SETUP.md).
+5. After signing in as the owner, create each driver from
+   **More → Cloud Sync → Create delivery account**. The account is confirmed
+   immediately; securely share the entered email and password with the driver.
 6. If this device already has local records, make a JSON backup before the
    first owner cloud sign-in. The initial owner sync merges local data into the
    business cloud data.
@@ -138,24 +137,45 @@ or save a delivery route history.
 
 1. Sign in from **More → Cloud Sync** with the Auth account provisioned for
    you. Do not select or use another person's identity.
-2. Open **Orders/Deliveries**. The initial list is filtered to today. Use the
-   date/status/search filters to locate an order.
-3. Unassigned **Pending** orders may be visible according to the configured
-   workflow, but they cannot be started or marked delivered by a driver.
-4. For an order assigned to you, mark it **Out for Delivery**, then mark it
-   **Delivered** when the delivery is complete. These status changes do not
-   record payment or bottle returns; contact the owner or follow the business's
-   separate payment/bottle procedure.
-5. To mark several eligible deliveries complete, select checkboxes beside your
+2. Open **Orders/Deliveries**. The initial list shows only orders assigned to
+   you for today's delivery date. Use **All time** to view your past assigned
+   orders; unassigned orders and orders assigned to another driver stay hidden.
+3. For an order assigned to you, mark it **Out for Delivery**, then tap
+   **Delivered** when the delivery is complete. Confirm the returned bottle
+   count in the delivery modal. For an assigned order with an outstanding
+   balance, tap **Collect payment**, enter the amount received on this visit,
+   and tap **Record**. Partial amounts are added to the existing paid total;
+   the app will not accept an amount greater than the balance due.
+4. To complete several eligible deliveries, select checkboxes beside your
    assigned orders already **Out for Delivery**, tap **Mark Delivered**, and
-   confirm. Payment and bottle-return details are not changed.
-6. Check the Cloud Sync status. When online, changes sync to the database and
-   the owner's screen refreshes. If offline, queued driver status changes are
-   sent when connectivity returns.
+   confirm each delivery and its bottle-return count in turn.
+5. Check the Cloud Sync status. When online, changes sync to the database and
+   the owner's screen refreshes. If offline, queued driver status, delivery,
+   and payment changes are sent when connectivity returns.
 
 The database checks driver identity, business membership, order assignment,
-and allowed status transition. A visible order is not permission to change
-another driver's order.
+order balance, and allowed status transition. A visible order is not permission
+to change another driver's order.
+
+### Assign orders and name drivers
+
+Owners can assign an individual order in its **Assigned delivery driver**
+field, choosing a driver, **Owner (you)**, or **Unassigned**. To assign several
+at once, select the active orders in **Orders**, choose a driver or **Assign to
+owner (you)** in the bulk action bar, and tap **Assign**. Completed and
+cancelled orders are not eligible.
+
+Driver names are taken from `profiles.display_name`. For an existing account
+with no display name, an owner can set one in Supabase SQL Editor:
+
+```sql
+update public.profiles
+set display_name = 'Driver name'
+where id = 'DRIVER_AUTH_USER_UUID';
+```
+
+The app uses the configured name in the header and driver selectors; before a
+name is configured, the driver's email prefix is shown on their own account.
 
 ### Share location during a shift
 
@@ -289,6 +309,7 @@ flowchart TD
 | View all business orders and customers | Yes | No |
 | Create, edit, cancel orders | Yes | No |
 | Assign delivery person | Yes | No |
+| Assign orders to self | Yes | No |
 | View assigned orders | Yes | Yes |
 | View unassigned pending orders | Yes | May view, cannot update |
 | Start/complete assigned delivery | Yes | Yes, allowed status transitions only |
@@ -297,6 +318,7 @@ flowchart TD
 | Manage products, recurring orders, reports, imports | Yes | No |
 | Change own email/password in the app | Yes | No |
 | Set a delivery person's credentials | Yes | No |
+| Create delivery accounts | Yes | No |
 | Manage business settings | Yes | No |
 
 For exact database policies and account provisioning, see

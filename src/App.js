@@ -48,7 +48,11 @@ import {
 import { useCapacitorStorage } from "./app/storage";
 import { useSupabaseSync } from "./app/useSupabaseSync";
 import { useDriverLocation } from "./app/useDriverLocation";
-import { markSelectedOrdersDelivered } from "./features/orders/ordersTabUtils";
+import {
+  assignSelectedOrders,
+  countTodayRemainingAssignedOrders,
+  markSelectedOrdersDelivered,
+} from "./features/orders/ordersTabUtils";
 import {
   uid,
   todayStr,
@@ -236,7 +240,7 @@ export default function App() {
   const driverLocation = useDriverLocation({
     membership: supabaseSync.membership,
     session: supabaseSync.session,
-    syncReady: Boolean(supabaseSync.membership && supabaseSync.session),
+    syncReady: supabaseSync.isSyncReady,
   });
   const userSession = supabaseSync.isConfigured
     ? supabaseSync.appSession
@@ -249,6 +253,7 @@ export default function App() {
   const [custModal, setCustModal] = useState(null);
   const [recurModal, setRecurModal] = useState(null);
   const [returnModalOrder, setReturnModalOrder] = useState(null); // { order, bottlesReturned }
+  const [bulkDeliveryQueue, setBulkDeliveryQueue] = useState([]);
   const [activeCustomer, setActiveCustomer] = useState(null);
   const [moreView, setMoreView] = useState("menu"); // menu | products | recurring | notifications
   const [importExportModalOpen, setImportExportModalOpen] = useState(false);
@@ -272,6 +277,7 @@ export default function App() {
       setCustModal(null);
       setRecurModal(null);
       setReturnModalOrder(null);
+      setBulkDeliveryQueue([]);
       setActiveCustomer(null);
     }
   }, [userSession?.role]);
@@ -314,6 +320,26 @@ export default function App() {
       return d;
     });
   }
+
+  function assignOrdersToDriver(orderIds, driverId) {
+    const driver =
+      userSession?.role === "owner" &&
+      String(userSession.id) === String(driverId)
+        ? { id: userSession.id, name: userSession.name || "Owner" }
+        : supabaseSync.drivers.find(
+            (item) => String(item.id) === String(driverId),
+          );
+    if (!driver) {
+      throw new Error("Select a delivery driver or assign the order to yourself.");
+    }
+
+    const selectedIds = new Set(orderIds.map(String));
+    update((d) => {
+      d.orders = assignSelectedOrders(d.orders, Array.from(selectedIds), driver);
+      return d;
+    });
+  }
+
   function deleteOrder(id) {
     update((d) => {
       d.orders = d.orders.filter((o) => o.id !== id);
@@ -323,7 +349,11 @@ export default function App() {
 
   function markDelivered(id) {
     if (userSession?.role === "delivery") {
-      supabaseSync.updateDriverStatus(id, "Delivered");
+      const order = data.orders.find((item) => String(item.id) === String(id));
+      if (order) {
+        setBulkDeliveryQueue([]);
+        setReturnModalOrder(order);
+      }
       return;
     }
     const order = data.orders.find((item) => item.id === id);
@@ -336,17 +366,18 @@ export default function App() {
     const selectedIds = new Set(orderIds.map(String));
 
     if (userSession?.role === "delivery") {
-      data.orders
+      const eligibleOrders = data.orders
         .filter(
           (order) =>
             selectedIds.has(String(order.id)) &&
             String(order.deliveryBoyId || "") ===
               String(userSession.deliveryBoyId || "") &&
             order.orderStatus === "Out for Delivery",
-        )
-        .forEach((order) =>
-          supabaseSync.updateDriverStatus(order.id, "Delivered"),
         );
+      if (eligibleOrders.length) {
+        setBulkDeliveryQueue(eligibleOrders.slice(1));
+        setReturnModalOrder(eligibleOrders[0]);
+      }
       return;
     }
 
@@ -365,7 +396,7 @@ export default function App() {
     supabaseSync.updateDriverStatus(id, "Out for Delivery");
   }
 
-  function confirmDelivery(payload, maybeBottles) {
+  async function confirmDelivery(payload, maybeBottles) {
     let orderId, deliveredBy, customAmount, bottlesReturned;
     if (typeof payload === "object" && payload !== null) {
       orderId = payload.orderId;
@@ -388,6 +419,36 @@ export default function App() {
       : 0;
 
     const finalDeliveredBy = String(deliveredBy || "").trim();
+    if (userSession?.role === "delivery") {
+      if (supabaseSync.confirmDriverDelivery) {
+        await supabaseSync.confirmDriverDelivery(
+          orderId,
+          validBottles,
+          finalDeliveredBy,
+        );
+      } else {
+        update((d) => {
+          const index = d.orders.findIndex(
+            (order) => String(order.id) === String(orderId),
+          );
+          if (index >= 0) {
+            d.orders[index] = {
+              ...d.orders[index],
+              orderStatus: "Delivered",
+              deliveredAt: new Date().toISOString(),
+              deliveredBy: finalDeliveredBy,
+              bottlesReturned: validBottles,
+            };
+          }
+          return d;
+        });
+      }
+      const [nextOrder, ...remainingOrders] = bulkDeliveryQueue;
+      setBulkDeliveryQueue(remainingOrders);
+      setReturnModalOrder(nextOrder || null);
+      return;
+    }
+
     const orderTotalVal = Number(existingOrder.total) || orderTotal(existingOrder.items || []);
     const parsedCustomAmount = Number(customAmount);
     const finalCustomAmount =
@@ -551,6 +612,14 @@ export default function App() {
   const pendingPayments = data.orders.filter(
     (o) => o.paymentStatus !== "Paid" && o.orderStatus !== "Cancelled",
   ).length;
+  const ordersBadge =
+    userSession?.role === "delivery"
+      ? countTodayRemainingAssignedOrders(
+          data.orders,
+          userSession.deliveryBoyId,
+          todayStr(),
+        )
+      : pendingDeliveries;
 
   if (supabaseSync.isConfigured && !supabaseSync.authReady) {
     return (
@@ -563,7 +632,39 @@ export default function App() {
   if (
     supabaseSync.isConfigured &&
     supabaseSync.authReady &&
-    (!supabaseSync.session || !supabaseSync.appSession)
+    !supabaseSync.session
+  ) {
+    return (
+      <SupabaseSyncPanel
+        sync={supabaseSync}
+        showBack={false}
+        onBack={() => {}}
+      />
+    );
+  }
+
+  if (
+    supabaseSync.isConfigured &&
+    supabaseSync.authReady &&
+    supabaseSync.session &&
+    !supabaseSync.appSession &&
+    supabaseSync.syncStatus !== "error"
+  ) {
+    return (
+      <div
+        role="status"
+        style={{ padding: 32, textAlign: "center", color: C.inkMute }}
+      >
+        Loading your business data…
+      </div>
+    );
+  }
+
+  if (
+    supabaseSync.isConfigured &&
+    supabaseSync.authReady &&
+    supabaseSync.session &&
+    !supabaseSync.appSession
   ) {
     return (
       <SupabaseSyncPanel
@@ -642,6 +743,13 @@ export default function App() {
             onBulkMarkDelivered={markOrdersDelivered}
             onStartDelivery={startDelivery}
             onMarkPaid={markPaid}
+            onRecordPayment={
+              supabaseSync.isConfigured
+                ? supabaseSync.recordDriverPayment
+                : undefined
+            }
+            onBulkAssign={assignOrdersToDriver}
+            drivers={supabaseSync.drivers}
             OrderRow={OrderRow}
             userSession={userSession}
           />
@@ -682,7 +790,7 @@ export default function App() {
       <SharedBottomNav
         tab={activeTab}
         setTab={setTab}
-        badge={pendingDeliveries}
+        badge={ordersBadge}
         role={userSession?.role === "delivery" ? "delivery" : "owner"}
       />
 
@@ -693,6 +801,7 @@ export default function App() {
           products={data.products}
           customers={data.customers}
           drivers={supabaseSync.drivers}
+          userSession={userSession}
           onClose={() => setOrderModal(null)}
           onSave={(o) => {
             upsertOrder(o);
@@ -724,10 +833,15 @@ export default function App() {
       )}
       {returnModalOrder && (
         <ReturnBottleModal
+          key={String(returnModalOrder.id)}
           order={returnModalOrder}
           userSession={userSession}
           data={data}
-          onClose={() => setReturnModalOrder(null)}
+          queueCount={bulkDeliveryQueue.length + 1}
+          onClose={() => {
+            setReturnModalOrder(null);
+            setBulkDeliveryQueue([]);
+          }}
           onConfirm={confirmDelivery}
         />
       )}
@@ -903,6 +1017,17 @@ function OrderRow({ order, actions, onOpenCustomer, data }) {
                   tone={C.green}
                   toneSoft={C.greenSoft}
                 />
+              )}
+              {order.orderStatus !== "Cancelled" && amountDue(order) > 0 && (
+                actions.recordPayment && (
+                  <ActionBtn
+                    onClick={actions.recordPayment}
+                    icon={Wallet}
+                    label="Collect payment"
+                    tone={C.gold}
+                    toneSoft={C.goldSoft}
+                  />
+                )
               )}
             </>
           )
@@ -3617,6 +3742,7 @@ function OrderModal({
   products,
   customers,
   drivers = [],
+  userSession,
   onClose,
   onSave,
 }) {
@@ -3934,68 +4060,37 @@ function OrderModal({
           </Field>
         </div>
       </div>
-      <Field label="Delivery Address">
-        <input
-          style={inputStyle}
-          value={address}
-          onChange={(e) => setAddress(e.target.value)}
-          placeholder="House / street / area"
-        />
-      </Field>
-
-      {/* <Field label="📍 Delivery Location (GPS)"> */}
-      <Field label=" Delivery Location">
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <button
-            className="tap"
-            onClick={handleGetLocation}
-            disabled={locLoading}
-            style={{
-              background: latitude && longitude ? C.greenSoft : C.cream,
-              color: latitude && longitude ? C.green : C.primary,
-              border: `1px solid ${latitude && longitude ? C.green : C.primary}`,
-              borderRadius: 10,
-              padding: "9px 14px",
-              fontSize: 12.5,
-              fontWeight: 700,
-              opacity: locLoading ? 0.6 : 1,
-              cursor: locLoading ? "wait" : "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <MapPin size={14} />
-            {locLoading
-              ? "Getting..."
-              : latitude && longitude
-                ? "Captured"
-                : "Get Location"}
-          </button>
-          {latitude && longitude && (
-            <span style={{ fontSize: 11.5, color: C.primary }}>
-              {latitude.toFixed(5)}, {longitude.toFixed(5)}
-            </span>
-          )}
+      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Field label="Delivery Address">
+            <input
+              style={inputStyle}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="House / street / area"
+            />
+          </Field>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <LocationPicker
-            latitude={latitude}
-            longitude={longitude}
-            onChange={({ latitude: lat, longitude: lng }) => {
-              setLatitude(lat);
-              setLongitude(lng);
-            }}
-          />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Field label="Assigned delivery driver">
+            <select
+              style={inputStyle}
+              value={deliveryBoyId}
+              onChange={(event) => setDeliveryBoyId(event.target.value)}
+            >
+              <option value="">Unassigned</option>
+              {userSession?.role === "owner" && userSession.id && (
+                <option value={userSession.id}>Owner (you)</option>
+              )}
+              {drivers.map((driver) => (
+                <option key={driver.id} value={driver.id}>
+                  {driver.name}
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
-      </Field>
+      </div>
 
       <Field label="Products">
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -4132,21 +4227,6 @@ function OrderModal({
         </div>
       </div>
 
-      <Field label="Assigned delivery driver">
-        <select
-          style={inputStyle}
-          value={deliveryBoyId}
-          onChange={(event) => setDeliveryBoyId(event.target.value)}
-        >
-          <option value="">Unassigned</option>
-          {drivers.map((driver) => (
-            <option key={driver.id} value={driver.id}>
-              {driver.name}
-            </option>
-          ))}
-        </select>
-      </Field>
-
       <div style={{ display: "flex", gap: 10 }}>
         <div style={{ flex: 1 }}>
           <Field label="Order Status">
@@ -4202,6 +4282,58 @@ function OrderModal({
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Optional notes"
         />
+      </Field>
+      <Field label="Delivery Location">
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            className="tap"
+            onClick={handleGetLocation}
+            disabled={locLoading}
+            style={{
+              background: latitude && longitude ? C.greenSoft : C.cream,
+              color: latitude && longitude ? C.green : C.primary,
+              border: `1px solid ${latitude && longitude ? C.green : C.primary}`,
+              borderRadius: 10,
+              padding: "9px 14px",
+              fontSize: 12.5,
+              fontWeight: 700,
+              opacity: locLoading ? 0.6 : 1,
+              cursor: locLoading ? "wait" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <MapPin size={14} />
+            {locLoading
+              ? "Getting..."
+              : latitude && longitude
+                ? "Captured"
+                : "Get Location"}
+          </button>
+          {latitude && longitude && (
+            <span style={{ fontSize: 11.5, color: C.primary }}>
+              {latitude.toFixed(5)}, {longitude.toFixed(5)}
+            </span>
+          )}
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <LocationPicker
+            latitude={latitude}
+            longitude={longitude}
+            onChange={({ latitude: lat, longitude: lng }) => {
+              setLatitude(lat);
+              setLongitude(lng);
+            }}
+          />
+        </div>
       </Field>
     </ModalShell>
   );
@@ -4636,7 +4768,15 @@ function RecurringModal({ initial, products, customers, onClose, onSave }) {
 }
 
 /* ============================== UNIFIED DELIVERY MODAL ============================== */
-function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
+export function ReturnBottleModal({
+  order,
+  userSession,
+  data,
+  queueCount = 1,
+  onClose,
+  onConfirm,
+}) {
+  const isDelivery = userSession?.role === "delivery";
   const [deliveredBy, setDeliveredBy] = useState(
     order.deliveredBy || order.deliveryBoyName || userSession?.name || "",
   );
@@ -4646,6 +4786,8 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
       : String(order.total || 0),
   );
   const [count, setCount] = useState(order.bottlesReturned || 0);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   // Calculate how many bottles they ARE receiving today
   const bottlesSent = (order.items || [])
@@ -4686,21 +4828,29 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
   const orderImpact = parsedAmount - orderTotalVal;
   const resultingBalance = priorBalance + orderImpact;
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
+    setSaving(true);
+    setError("");
     const finalDeliveredBy = String(deliveredBy || "").trim();
     const parsedAmount = Number(customAmount);
     const finalAmount = Number.isFinite(parsedAmount)
       ? Math.max(0, Math.round(parsedAmount))
       : 0;
     const parsedBottleCount = Number(count);
-    onConfirm({
-      orderId: order.id,
-      deliveredBy: finalDeliveredBy,
-      customAmount: finalAmount,
-      bottlesReturned: Number.isFinite(parsedBottleCount)
-        ? Math.max(0, Math.floor(parsedBottleCount))
-        : 0,
-    });
+    try {
+      await onConfirm({
+        orderId: order.id,
+        deliveredBy: finalDeliveredBy,
+        ...(!isDelivery ? { customAmount: finalAmount } : {}),
+        bottlesReturned: Number.isFinite(parsedBottleCount)
+          ? Math.max(0, Math.floor(parsedBottleCount))
+          : 0,
+      });
+    } catch (confirmError) {
+      setError(confirmError.message || "Unable to confirm this delivery.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -4710,6 +4860,8 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
       footer={
         <button
           className="tap"
+          type="button"
+          disabled={saving}
           onClick={handleConfirm}
           style={{
             width: "100%",
@@ -4722,7 +4874,11 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
             fontSize: 14.5,
           }}
         >
-          Confirm & Mark Delivered
+          {saving
+            ? "Saving…"
+            : queueCount > 1
+              ? `Confirm Delivery (${queueCount} remaining)`
+              : "Confirm & Mark Delivered"}
         </button>
       }
     >
@@ -4738,9 +4894,10 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
       </div>
 
       {/* 1. DELIVERED BY */}
-      <Field label="Delivered By (Staff Name)">
+      <Field label={isDelivery ? "Delivered By" : "Delivered By (Staff Name)"}>
         <input
           type="text"
+          readOnly={isDelivery}
           placeholder="Enter staff / delivery person name"
           value={deliveredBy}
           onChange={(e) => setDeliveredBy(e.target.value)}
@@ -4748,7 +4905,7 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
         />
       </Field>
 
-      {/* 2. CUSTOM AMOUNT */}
+      {!isDelivery && (
       <Field label="Custom Amount / Amount Collected (₹)">
         <input
           type="number"
@@ -4835,9 +4992,10 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
           </div>
         </div>
       </Field>
+      )}
 
       {/* 3. EMPTY BOTTLES RETURNED */}
-      {bottlesSent > 0 && (
+      {(isDelivery || bottlesSent > 0) && (
         <Field label="Empty Bottles Returned">
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <input
@@ -4893,8 +5051,16 @@ function ReturnBottleModal({ order, userSession, data, onClose, onConfirm }) {
           marginTop: 12,
         }}
       >
-        <b>Note:</b> Confirming will save delivery staff name, amount collected, bottle returns, and send WhatsApp delivery confirmation.
+        <b>Note:</b>{" "}
+        {isDelivery
+          ? "Confirming saves the delivery and bottle returns. Record any payment separately using Collect payment."
+          : "Confirming will save delivery staff name, amount collected, bottle returns, and send WhatsApp delivery confirmation."}
       </div>
+      {error && (
+        <div role="alert" style={{ color: C.brick, fontSize: 12, marginTop: 10 }}>
+          {error}
+        </div>
+      )}
     </ModalShell>
   );
 }

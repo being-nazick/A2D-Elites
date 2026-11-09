@@ -73,3 +73,18 @@ test("lets the driver stop sharing", () => {
   fireEvent.click(screen.getByRole("button", { name: "Stop Sharing" }));
   expect(locationSharing.stopSharing).toHaveBeenCalledTimes(1);
 });
+
+test("shows the business ID used to look up owner-visible locations", () => {
+  render(
+    <DriverLocationView
+      userSession={{
+        role: "owner",
+        businessId: "business-1",
+      }}
+      drivers={[{ id: "driver-1", name: "Raju" }]}
+      locationSharing={locationSharing}
+    />,
+  );
+
+  expect(screen.getByText("Business ID: business-1")).toBeInTheDocument();
+});

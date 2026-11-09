@@ -187,6 +187,7 @@ export function mapRelationalRowsToAppData({
         amountPaid: Number(order.amount_paid) || 0,
         total: Number(order.total) || 0,
         notes: order.notes || "",
+        deliveredAt: order.delivered_at || "",
         createdAt: order.created_at,
       };
     }),
@@ -219,7 +220,7 @@ export function mapProductToRow(product, businessId) {
   };
 }
 
-export function mapOrderToRows(order, businessId, driverIds = new Set()) {
+export function mapOrderToRows(order, businessId, assignedUserIds = new Set()) {
   const assignedDriverId = String(
     order.deliveryBoyId || order.assignedDriverId || "",
   );
@@ -228,7 +229,7 @@ export function mapOrderToRows(order, businessId, driverIds = new Set()) {
       business_id: businessId,
       id: String(order.id),
       customer_id: String(order.customerId),
-      assigned_driver_id: driverIds.has(assignedDriverId)
+      assigned_driver_id: assignedUserIds.has(assignedDriverId)
         ? assignedDriverId
         : null,
       order_date: order.orderDate || new Date().toISOString().slice(0, 10),

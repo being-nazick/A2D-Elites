@@ -31,16 +31,26 @@ then run
 [`../supabase/migrations/20261109_enable_relational_realtime.sql`](../supabase/migrations/20261109_enable_relational_realtime.sql)
 and
 [`../supabase/migrations/20261110_driver_locations.sql`](../supabase/migrations/20261110_driver_locations.sql)
-to enable Realtime publications. Then provision the initial owner as described
-below. The schema creates:
+and
+[`../supabase/migrations/20261111_driver_payment_recording.sql`](../supabase/migrations/20261111_driver_payment_recording.sql)
+and
+[`../supabase/migrations/20261112_owner_order_assignment.sql`](../supabase/migrations/20261112_owner_order_assignment.sql)
+and
+[`../supabase/migrations/20261113_driver_delivery_details.sql`](../supabase/migrations/20261113_driver_delivery_details.sql)
+to enable Realtime, install driver payment recording, allow owners to assign
+orders to themselves, and persist driver delivery confirmations and returned
+bottles. These migrations are safe to run after the first-install schema. Then
+provision the initial owner as described below. The schema creates:
 
 - `profiles`: non-role profile information linked to `auth.users`.
 - `businesses` and `business_memberships`: tenant boundary and per-business
   `owner` / `delivery_driver` role.
 - `customers`, `products`, `orders`, and `order_items`.
 - `driver_locations`, which holds at most one current location per driver.
+- `driver_payments`, a private, idempotent record of driver-collected payments.
 - `business_settings`, which only an owner can read or update.
-- RLS policies and narrow RPCs for owner order writes and driver status updates.
+- RLS policies and narrow RPCs for owner order writes, driver status updates,
+  driver delivery confirmations, and assigned-driver payment collection.
 
 Drivers can read orders assigned to their Auth user ID and unassigned orders
 with `delivery_status = 'pending'`; customer details are visible only for
@@ -56,10 +66,18 @@ and
 [`../supabase/migrations/20261109_enable_relational_realtime.sql`](../supabase/migrations/20261109_enable_relational_realtime.sql)
 and
 [`../supabase/migrations/20261110_driver_locations.sql`](../supabase/migrations/20261110_driver_locations.sql)
+and
+[`../supabase/migrations/20261111_driver_payment_recording.sql`](../supabase/migrations/20261111_driver_payment_recording.sql)
+and
+[`../supabase/migrations/20261112_owner_order_assignment.sql`](../supabase/migrations/20261112_owner_order_assignment.sql)
+and
+[`../supabase/migrations/20261113_driver_delivery_details.sql`](../supabase/migrations/20261113_driver_delivery_details.sql)
 in SQL Editor. These migrations add client fields/policies and enable
 business-scoped change events for customers, products, orders, order items,
-recurring orders, and driver locations. Do not rerun the first-install schema
-against an existing project.
+recurring orders, and driver locations; add driver payment collection; and
+allow owner-self assignment and secure driver delivery/bottle-return
+confirmation. Do not rerun the first-install schema against an existing
+project.
 
 ### Driver location sharing
 
@@ -109,24 +127,42 @@ select id, 'AUTH_USER_UUID_HERE'::uuid, 'owner'
 from new_business;
 ```
 
-Drivers may sign up through the same Auth flow, but cannot access business data
-until an owner/admin provisions a `delivery_driver` membership. For a live
-invitation flow, use a Supabase Edge Function or trusted server that verifies
-the caller is an owner before inserting a membership. Keep the service-role key
-only in that server's secret environment, never in React or a Capacitor bundle.
+Owners can create another driver's Auth account and `delivery_driver`
+membership together from **More → Cloud Sync → Create delivery account**. This
+uses the owner-authenticated `manage-driver-credentials` Edge Function; it
+creates a confirmed Auth user, copies the driver's name to their profile, and
+adds them to the owner's business. Drivers may also sign up through another
+trusted flow, but cannot access business data until an owner provisions their
+membership. Never insert memberships from client code or expose the
+service-role/secret key in React or a Capacitor bundle.
 
-## Owner credential management
+### Driver display names
 
-The Cloud Sync panel lets an authenticated owner update their own email/password
-after confirming their current password, and set a delivery member's email
-and/or password. The owner's email update follows Supabase Auth's email-change
-confirmation settings. Driver credential updates are handled only by
+The app reads driver names from `profiles.display_name`. New profiles copy this
+field from Auth user metadata named `display_name`. For existing profiles with
+no name, set it in SQL Editor using the driver's Auth UUID:
+
+```sql
+update public.profiles
+set display_name = 'Driver name'
+where id = 'DRIVER_AUTH_USER_UUID';
+```
+
+The display name appears in the driver's app header and owner assignment lists.
+Until configured, the driver's own header uses the email prefix.
+
+## Owner account and credential management
+
+The Cloud Sync panel lets an authenticated owner create driver accounts, update
+their own email/password after confirming their current password, and set a
+delivery member's email and/or password. The owner's email update follows
+Supabase Auth's email-change confirmation settings. Driver account creation
+and credential updates are handled only by
 [`../supabase/functions/manage-driver-credentials/index.ts`](../supabase/functions/manage-driver-credentials/index.ts):
-the function validates the caller's Auth token, verifies their owner membership
-and the target's delivery-driver membership in the same business, then calls
-the Auth Admin API. A driver cannot invoke it to change credentials.
-For safety, it refuses to change credentials for a driver account that is
-shared across multiple businesses.
+the function validates the caller's Auth token, verifies their owner
+membership, and performs account/membership changes with the Auth Admin API.
+A driver cannot invoke it to manage accounts. For safety, it refuses to change
+credentials for a driver account that is shared across multiple businesses.
 
 Deploy `manage-driver-credentials` to the Supabase project with the Supabase
 CLI. It uses Supabase's server-injected `SUPABASE_SECRET_KEYS` environment
@@ -259,9 +295,11 @@ reach Supabase.
 3. Sign in as the provisioned owner. The first owner sync merges the existing
    device records with relational data; review the resulting customers and
    orders before using production data.
-4. Provision a driver account with a `delivery_driver` membership. Sign in as
-   that user and verify that assigned and unassigned pending orders are visible,
-   while only assigned orders have delivery actions.
+4. Create a driver account in **More → Cloud Sync**, then sign in as that user
+   and verify that assigned and unassigned pending orders are visible, while
+   only assigned orders have delivery and payment actions. Apply the
+   driver payment migration before using payment collection on an existing
+   project.
 For production, also set the same environment variables in the build
 environment; rebuild and sync the Capacitor native project after making a new
 web build.

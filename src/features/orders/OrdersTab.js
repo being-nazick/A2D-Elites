@@ -1,10 +1,20 @@
 import { Search, Plus } from "lucide-react";
 import { useMemo, useState } from "react";
 import { C } from "../../app/constants";
-import { addDays, fmtDateShort, monthKey, todayStr } from "../../app/helpers";
+import {
+  addDays,
+  amountDue,
+  fmtDateShort,
+  monthKey,
+  todayStr,
+  uid,
+} from "../../app/helpers";
 import { Chip, SelectChip, TopBar } from "../../components/Shared";
 import { Dialog } from "@capacitor/dialog";
-import { getSelectableDeliveryOrders } from "./ordersTabUtils";
+import {
+  getOrderDeliveryDate,
+  getSelectableDeliveryOrders,
+} from "./ordersTabUtils";
 
 
 export default function OrdersTab({
@@ -16,6 +26,9 @@ export default function OrdersTab({
   onBulkMarkDelivered,
   onStartDelivery,
   onMarkPaid,
+  onRecordPayment,
+  onBulkAssign,
+  drivers = [],
   OrderRow,
   userSession,
 }) {
@@ -26,36 +39,84 @@ export default function OrdersTab({
   const [filterProduct, setFilterProduct] = useState("All");
   const [range, setRange] = useState(isDelivery ? "today" : "all");
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
+  const [bulkDriverId, setBulkDriverId] = useState("");
   const [bulkError, setBulkError] = useState("");
+  const [paymentOrderId, setPaymentOrderId] = useState(null);
+  const [paymentAmount, setPaymentAmount] = useState("");
+  const [paymentId, setPaymentId] = useState("");
+  const [paymentError, setPaymentError] = useState("");
+  const [paymentNotice, setPaymentNotice] = useState(null);
+  const [paymentBusy, setPaymentBusy] = useState(false);
+
+  const submitDriverPayment = async (event, order) => {
+    event.preventDefault();
+    setPaymentError("");
+    const amount = Number(paymentAmount);
+    if (!Number.isFinite(amount) || amount <= 0 || amount > amountDue(order)) {
+      setPaymentError(
+        `Enter an amount between ₹0.01 and ₹${amountDue(order).toFixed(2)}.`,
+      );
+      return;
+    }
+
+    setPaymentBusy(true);
+    try {
+      const result = await onRecordPayment(order.id, amount, paymentId);
+      setPaymentNotice({
+        orderId: order.id,
+        message: result?.queued
+          ? "Payment saved on this device and will sync when online."
+          : "Payment recorded.",
+      });
+      setPaymentOrderId(null);
+    } catch (error) {
+      setPaymentError(error.message || "Unable to record this payment.");
+    } finally {
+      setPaymentBusy(false);
+    }
+  };
 
   const filtered = useMemo(() => {
-    let list = [...data.orders].sort((a, b) =>
-      (b.orderDate + b.createdAt).localeCompare(a.orderDate + a.createdAt),
-    );
+    let list = [...data.orders];
 
-    // Filter by delivery boy if assigned
+    // Drivers only see orders assigned to their authenticated account.
     if (isDelivery && userSession?.deliveryBoyId) {
       list = list.filter(
         (order) =>
           String(order.deliveryBoyId || "") ===
-            String(userSession.deliveryBoyId) ||
-          (!order.deliveryBoyId && order.orderStatus === "Pending"),
+          String(userSession.deliveryBoyId),
       );
     }
+    list.sort((a, b) => {
+      const aDate = isDelivery ? getOrderDeliveryDate(a) : a.orderDate;
+      const bDate = isDelivery ? getOrderDeliveryDate(b) : b.orderDate;
+      return (bDate + b.createdAt).localeCompare(aDate + a.createdAt);
+    });
 
     const today = todayStr();
 
     if (range === "today") {
-      list = list.filter((order) => order.orderDate === today);
+      list = list.filter(
+        (order) =>
+          (isDelivery ? getOrderDeliveryDate(order) : order.orderDate) ===
+          today,
+      );
     }
 
     if (range === "7d") {
-      list = list.filter((order) => order.orderDate >= addDays(today, -6));
+      list = list.filter((order) => {
+        const orderDate = isDelivery
+          ? getOrderDeliveryDate(order)
+          : order.orderDate;
+        return orderDate >= addDays(today, -6) && orderDate <= today;
+      });
     }
 
     if (range === "month") {
       list = list.filter(
-        (order) => monthKey(order.orderDate) === monthKey(today),
+        (order) =>
+          monthKey(isDelivery ? getOrderDeliveryDate(order) : order.orderDate) ===
+          monthKey(today),
       );
     }
 
@@ -157,6 +218,35 @@ export default function OrdersTab({
     } catch (error) {
       console.error("Bulk delivery update failed:", error);
       setBulkError(error.message || "Unable to mark the selected orders delivered.");
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    const driver =
+      drivers.find((item) => String(item.id) === String(bulkDriverId)) ||
+      (userSession?.role === "owner" &&
+      String(userSession.id) === String(bulkDriverId)
+        ? { id: userSession.id, name: userSession.name || "Owner" }
+        : null);
+    if (!driver || !onBulkAssign || selectedOrders.length === 0) return;
+
+    try {
+      const { value } = await Dialog.confirm({
+        title: "Assign selected orders?",
+        message: `Assign ${selectedOrders.length} order(s) to ${driver.name}?`,
+        okButtonTitle: "Assign",
+        cancelButtonTitle: "Cancel",
+      });
+      if (!value) return;
+      await onBulkAssign(
+        selectedOrders.map((order) => order.id),
+        driver.id,
+      );
+      setBulkDriverId("");
+      clearSelection();
+    } catch (error) {
+      console.error("Bulk order assignment failed:", error);
+      setBulkError(error.message || "Unable to assign the selected orders.");
     }
   };
 
@@ -400,7 +490,9 @@ export default function OrdersTab({
                   fontFamily: "'JetBrains Mono',monospace",
                 }}
               >
-                {fmtDateShort(order.orderDate)}
+                {fmtDateShort(
+                  isDelivery ? getOrderDeliveryDate(order) : order.orderDate,
+                )}
               </div>
 
               <div
@@ -452,11 +544,93 @@ export default function OrdersTab({
                       del: onDelete,
                       isDelivery,
                       deliveryBoyId: userSession?.deliveryBoyId,
+                      recordPayment: onRecordPayment
+                        ? () => {
+                            setPaymentOrderId(order.id);
+                            setPaymentAmount(amountDue(order).toFixed(2));
+                            setPaymentId(uid("pay"));
+                            setPaymentError("");
+                            setPaymentNotice(null);
+                          }
+                        : undefined,
                     }}
                     data={data}
                   />
                 </div>
               </div>
+              {paymentOrderId === order.id && (
+                <form
+                  onSubmit={(event) => submitDriverPayment(event, order)}
+                  style={{
+                    margin: "8px 0 0 26px",
+                    padding: 12,
+                    background: C.paper,
+                    border: `1px solid ${C.paperLine}`,
+                    borderRadius: 12,
+                  }}
+                >
+                  <label
+                    htmlFor={`payment-amount-${order.id}`}
+                    style={{
+                      display: "block",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: C.inkMute,
+                      marginBottom: 6,
+                    }}
+                  >
+                    Amount collected on this visit (₹{amountDue(order).toFixed(2)} due)
+                  </label>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input
+                      id={`payment-amount-${order.id}`}
+                      aria-label="Amount collected"
+                      type="number"
+                      min="0.01"
+                      max={amountDue(order).toFixed(2)}
+                      step="0.01"
+                      required
+                      value={paymentAmount}
+                      onChange={(event) => setPaymentAmount(event.target.value)}
+                      style={{
+                        flex: 1,
+                        minWidth: 0,
+                        padding: "9px 10px",
+                        border: `1px solid ${C.paperLine}`,
+                        borderRadius: 9,
+                        fontSize: 14,
+                      }}
+                    />
+                    <button
+                      type="submit"
+                      className="tap"
+                      disabled={paymentBusy}
+                      style={primaryActionStyle}
+                    >
+                      {paymentBusy ? "Saving…" : "Record"}
+                    </button>
+                    <button
+                      type="button"
+                      className="tap"
+                      disabled={paymentBusy}
+                      onClick={() => setPaymentOrderId(null)}
+                      style={secondaryActionStyle}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {paymentError && (
+                    <div role="alert" style={paymentErrorStyle}>
+                      {paymentError}
+                    </div>
+                  )}
+                </form>
+              )}
+              {paymentNotice?.orderId === order.id && (
+                <div role="status" style={paymentNoticeStyle}>
+                  {paymentNotice.message}
+                </div>
+              )}
             </div>
           );
         })}
@@ -502,7 +676,9 @@ export default function OrdersTab({
                 marginTop: 2,
               }}
             >
-              Delivery status only
+              {isDelivery
+                ? "Delivery status and payment"
+                : "Assignment, payment, delivery"}
             </div>
           </div>
 
@@ -533,6 +709,55 @@ export default function OrdersTab({
                 ✓ Mark {unpaidSelectedOrders.length} paid
               </button>
             )}
+            {!isDelivery &&
+              onBulkAssign &&
+              (drivers.length > 0 ||
+                (userSession?.role === "owner" && userSession?.id)) && (
+              <div style={{ display: "flex", gap: 6 }}>
+                <select
+                  aria-label="Assign selected orders to driver"
+                  value={bulkDriverId}
+                  onChange={(event) => setBulkDriverId(event.target.value)}
+                  style={{
+                    maxWidth: 140,
+                    border: "none",
+                    borderRadius: 10,
+                    padding: "8px",
+                    fontSize: 11,
+                  }}
+                >
+                  <option value="">Assign driver…</option>
+                  {userSession?.role === "owner" && userSession?.id && (
+                    <option value={userSession.id}>
+                      Assign to owner (you)
+                    </option>
+                  )}
+                  {drivers.map((driver) => (
+                    <option key={driver.id} value={driver.id}>
+                      {driver.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="tap"
+                  onClick={handleBulkAssign}
+                  disabled={!bulkDriverId}
+                  style={{
+                    border: "none",
+                    background: "#fff",
+                    color: C.primaryDark,
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    fontWeight: 700,
+                    fontSize: 11,
+                    opacity: bulkDriverId ? 1 : 0.55,
+                  }}
+                >
+                  Assign
+                </button>
+              </div>
+            )}
             <button
               type="button"
               className="tap"
@@ -558,3 +783,26 @@ export default function OrdersTab({
     </div>
   );
 }
+
+const primaryActionStyle = {
+  border: "none",
+  background: C.primary,
+  color: "#fff",
+  borderRadius: 9,
+  padding: "9px 12px",
+  fontWeight: 700,
+  fontSize: 12,
+};
+
+const secondaryActionStyle = {
+  border: `1px solid ${C.paperLine}`,
+  background: C.paper,
+  color: C.inkMute,
+  borderRadius: 9,
+  padding: "9px 10px",
+  fontWeight: 700,
+  fontSize: 12,
+};
+
+const paymentErrorStyle = { color: C.brick, fontSize: 12, marginTop: 8 };
+const paymentNoticeStyle = { color: C.primaryDark, fontSize: 12, margin: "6px 0 0 26px" };

@@ -46,8 +46,10 @@ Deno.serve(async (request: Request) => {
     }
 
     let body: {
+      action?: unknown;
       businessId?: unknown;
       driverUserId?: unknown;
+      name?: unknown;
       email?: unknown;
       password?: unknown;
     };
@@ -58,15 +60,32 @@ Deno.serve(async (request: Request) => {
     }
 
     const { businessId, driverUserId } = body;
+    const action =
+      body.action === undefined || body.action === "update"
+        ? "update"
+        : body.action;
+    const name = typeof body.name === "string" ? body.name.trim() : "";
     const email = typeof body.email === "string" ? body.email.trim() : "";
     const password = typeof body.password === "string" ? body.password : "";
+    if (typeof businessId !== "string" || !["create", "update"].includes(String(action))) {
+      return jsonResponse(400, {
+        error: "A valid action and business are required.",
+      });
+    }
     if (
-      typeof businessId !== "string" ||
-      typeof driverUserId !== "string" ||
-      (!email && !password)
+      action === "create" &&
+      (!name || name.length > 100 || !email || !password)
     ) {
       return jsonResponse(400, {
-        error: "Business, driver, and new credential details are required.",
+        error: "A driver's name, email, and password are required.",
+      });
+    }
+    if (
+      action === "update" &&
+      (typeof driverUserId !== "string" || (!email && !password))
+    ) {
+      return jsonResponse(400, {
+        error: "A driver and new credential details are required.",
       });
     }
     if (password && password.length < 8) {
@@ -84,6 +103,48 @@ Deno.serve(async (request: Request) => {
     if (ownerError) throw ownerError;
     if (ownerMembership?.role !== "owner") {
       return jsonResponse(403, { error: "Owner access is required." });
+    }
+
+    if (action === "create") {
+      const { data: createdData, error: createError } =
+        await admin.auth.admin.createUser({
+          email,
+          password,
+          email_confirm: true,
+          user_metadata: { display_name: name },
+        });
+      if (createError) {
+        return jsonResponse(400, { error: createError.message });
+      }
+      if (!createdData.user) {
+        throw new Error("Supabase did not return the newly created user.");
+      }
+
+      const { error: membershipInsertError } = await admin
+        .from("business_memberships")
+        .insert({
+          business_id: businessId,
+          user_id: createdData.user.id,
+          role: "delivery_driver",
+        });
+      if (membershipInsertError) {
+        const { error: cleanupError } = await admin.auth.admin.deleteUser(
+          createdData.user.id,
+        );
+        if (cleanupError) {
+          throw new Error(
+            `Unable to add the driver membership: ${membershipInsertError.message}. Account cleanup failed: ${cleanupError.message}`,
+          );
+        }
+        throw new Error(
+          `Unable to add the driver membership: ${membershipInsertError.message}`,
+        );
+      }
+
+      return jsonResponse(200, {
+        success: true,
+        created: { userId: createdData.user.id },
+      });
     }
 
     const { data: driverMemberships, error: driverError } = await admin

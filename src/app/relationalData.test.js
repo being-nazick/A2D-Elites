@@ -93,6 +93,29 @@ test("maps an assigned order and its items to normalized table rows", () => {
   });
 });
 
+test("maps an owner-assigned order to the owner's display name", () => {
+  const data = mapRelationalRowsToAppData({
+    customers: [{ id: "customer-1", name: "Customer", metadata: {} }],
+    orders: [
+      {
+        id: "order-1",
+        customer_id: "customer-1",
+        assigned_driver_id: "owner-1",
+        order_date: "2026-11-09",
+        delivery_status: "delivered",
+        payment_status: "pending",
+        metadata: {},
+      },
+    ],
+    drivers: [{ id: "owner-1", name: "Owner" }],
+  });
+
+  expect(data.orders[0]).toMatchObject({
+    deliveryBoyId: "owner-1",
+    deliveryBoyName: "Owner",
+  });
+});
+
 test("hydrates related customer and order-item data", () => {
   const data = mapRelationalRowsToAppData({
     customers: [
@@ -112,11 +135,12 @@ test("hydrates related customer and order-item data", () => {
         assigned_driver_id: null,
         order_date: "2026-11-07",
         delivery_date: null,
-        delivery_status: "pending",
+        delivery_status: "delivered",
         payment_status: "pending",
         amount_paid: 0,
         total: 10,
         notes: "",
+        delivered_at: "2026-11-08T10:00:00Z",
         created_at: "2026-11-07T10:00:00Z",
         metadata: {},
       },
@@ -139,7 +163,8 @@ test("hydrates related customer and order-item data", () => {
   expect(data.orders[0]).toMatchObject({
     customerName: "Customer",
     phone: "5550100",
-    orderStatus: "Pending",
+    orderStatus: "Delivered",
+    deliveredAt: "2026-11-08T10:00:00Z",
     items: [{ id: "item-1", productName: "Milk", qty: 1, price: 10 }],
   });
 });
